@@ -13,9 +13,10 @@
     .row > * { flex:1; }
     #number { font-size:44px; margin-top:10px; color:#25D366; }
     ul { list-style:none; padding:0; margin:0; }
-    li { padding:6px 0; border-bottom:1px solid #222; }
+    li { padding:6px 0; border-bottom:1px solid #222; display:flex; justify-content:space-between; align-items:center; }
     .muted { color:#aaa; font-size:14px; }
     .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .crown { margin-left:8px; }
   </style>
 </head>
 <body>
@@ -51,9 +52,8 @@
       <button onclick="reveal()">Revelar cartas</button>
     </div>
 
-    <div id="playerControls" style="display:none;">
-      <button onclick="leave()">Sair</button>
-    </div>
+    <!-- Botão Sair para TODOS (inclusive mestre) -->
+    <button onclick="leave()" style="margin-top:10px;">Sair</button>
 
     <div id="number"></div>
     <div id="allNumbers"></div>
@@ -107,57 +107,24 @@
     }
 
     function leave() {
-      location.reload();
+      if (!currentRoomId) return resetToJoin();
+      socket.emit("leaveRoom", currentRoomId);
+      // o servidor vai responder com roomClosed (se mestre) ou apenas atualizar lista (se jogador)
+      // pra garantir UX, já voltamos:
+      resetToJoin();
     }
 
-    // ====== Eventos do servidor ======
-    socket.on("master", () => {
-      isMaster = true;
-      document.getElementById("masterControls").style.display = "block";
-      document.getElementById("playerControls").style.display = "none";
-    });
-
-    socket.on("roomCreated", (roomId) => {
-      currentRoomId = roomId;
-      goToGameScreen();
-      updateRoomInfo();
-      // mestre também pode sair, então mostramos o botão Sair em playerControls se quiser — mantive só pros jogadores.
-    });
-
-    socket.on("joinedRoom", (roomId) => {
-      currentRoomId = roomId;
-      goToGameScreen();
+    function resetToJoin() {
+      currentRoomId = null;
       isMaster = false;
+      document.getElementById("number").innerText = "";
+      document.getElementById("allNumbers").innerHTML = "";
+      document.getElementById("players").innerHTML = "";
+      document.getElementById("roomInfo").innerHTML = "";
       document.getElementById("masterControls").style.display = "none";
-      document.getElementById("playerControls").style.display = "block";
-      updateRoomInfo();
-    });
-
-    socket.on("playersUpdate", (list) => {
-      const ul = document.getElementById("players");
-      ul.innerHTML = "";
-      list.forEach(name => {
-        const li = document.createElement("li");
-        li.textContent = name;
-        ul.appendChild(li);
-      });
-    });
-
-    socket.on("number", (n) => {
-      document.getElementById("number").innerText = `Seu número: ${n}`;
-    });
-
-    socket.on("allNumbers", (data) => {
-      const div = document.getElementById("allNumbers");
-      div.innerHTML = "<h3>🔥 Revelação 🔥</h3>";
-      data.forEach(p => {
-        div.innerHTML += `<p>${p.name} → ${p.number}</p>`;
-      });
-    });
-
-    socket.on("errorMessage", (msg) => {
-      alert(msg);
-    });
+      document.getElementById("screenGame").style.display = "none";
+      document.getElementById("screenJoin").style.display = "block";
+    }
 
     function goToGameScreen() {
       document.getElementById("screenJoin").style.display = "none";
@@ -170,6 +137,69 @@
         ? `Sala: <span class="code"><b>${currentRoomId}</b></span> ${isMaster ? "(mestre)" : ""}`
         : "";
     }
+
+    // ====== Eventos do servidor ======
+    socket.on("master", () => {
+      isMaster = true;
+      document.getElementById("masterControls").style.display = "block";
+      updateRoomInfo();
+    });
+
+    socket.on("roomCreated", (roomId) => {
+      currentRoomId = roomId;
+      goToGameScreen();
+      updateRoomInfo();
+    });
+
+    socket.on("joinedRoom", (roomId) => {
+      currentRoomId = roomId;
+      isMaster = false;
+      document.getElementById("masterControls").style.display = "none";
+      goToGameScreen();
+      updateRoomInfo();
+    });
+
+    // playersUpdate agora vem como objeto com info do mestre
+    socket.on("playersUpdate", ({ players }) => {
+      const ul = document.getElementById("players");
+      ul.innerHTML = "";
+
+      players.forEach(p => {
+        const li = document.createElement("li");
+
+        const left = document.createElement("span");
+        left.textContent = p.name;
+
+        const right = document.createElement("span");
+        right.innerHTML = p.isMaster ? `<span class="crown">👑</span>` : "";
+
+        li.appendChild(left);
+        li.appendChild(right);
+        ul.appendChild(li);
+      });
+    });
+
+    socket.on("number", (n) => {
+      document.getElementById("number").innerText = `Seu número: ${n}`;
+    });
+
+    // Já vem ordenado do maior para o menor (server), só renderiza
+    socket.on("allNumbers", (data) => {
+      const div = document.getElementById("allNumbers");
+      div.innerHTML = "<h3>🔥 Revelação (maior → menor) 🔥</h3>";
+      data.forEach(p => {
+        div.innerHTML += `<p>${p.name} → <b>${p.number}</b></p>`;
+      });
+    });
+
+    socket.on("roomClosed", () => {
+      alert("O mestre saiu. A sala foi fechada.");
+      resetToJoin();
+    });
+
+    socket.on("errorMessage", (msg) => {
+      alert(msg);
+    });
   </script>
 </body>
 </html>
