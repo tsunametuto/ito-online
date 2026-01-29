@@ -31,6 +31,39 @@ function generateRoomId() {
   return out;
 }
 
+function emitPlayersUpdate(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  const players = Object.keys(room.players).map((id) => ({
+    id,
+    name: room.players[id],
+    isMaster: id === room.masterId,
+  }));
+
+  io.to(roomId).emit("playersUpdate", {
+    roomId,
+    players,
+    masterId: room.masterId,
+  });
+}
+
+function closeRoom(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  // avisa todo mundo que a sala fechou
+  io.to(roomId).emit("roomClosed");
+
+  // faz os sockets saírem da sala (limpeza)
+  for (const id of Object.keys(room.players)) {
+    const s = io.sockets.sockets.get(id);
+    if (s) s.leave(roomId);
+  }
+
+  delete rooms[roomId];
+}
+
 io.on("connection", (socket) => {
   // ✅ Criar sala (mestre)
   socket.on("createRoom", ({ password, masterName }) => {
@@ -54,8 +87,7 @@ io.on("connection", (socket) => {
 
     socket.emit("master");
     socket.emit("roomCreated", roomId);
-
-    io.to(roomId).emit("playersUpdate", Object.values(rooms[roomId].players));
+    emitPlayersUpdate(roomId);
   });
 
   // ✅ Entrar em sala (jogador)
@@ -82,7 +114,7 @@ io.on("connection", (socket) => {
     socket.join(roomId);
 
     socket.emit("joinedRoom", roomId);
-    io.to(roomId).emit("playersUpdate", Object.values(room.players));
+    emitPlayersUpdate(roomId);
   });
 
   // 🎲 Distribuir números (por sala)
@@ -102,7 +134,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  // 😈 Revelar números (por sala)
+  // 😈 Revelar números (por sala) - ordenado do maior pro menor
   socket.on("reveal", (roomId) => {
     roomId = (roomId || "").trim().toUpperCase();
     const room = rooms[roomId];
@@ -110,12 +142,39 @@ io.on("connection", (socket) => {
 
     if (socket.id !== room.masterId) return;
 
-    const result = Object.keys(room.players).map((playerId) => ({
-      name: room.players[playerId],
-      number: room.numbers[playerId],
-    }));
+    const result = Object.keys(room.players)
+      .map((playerId) => ({
+        name: room.players[playerId],
+        number: room.numbers[playerId],
+      }))
+      .sort((a, b) => (b.number ?? -1) - (a.number ?? -1)); // maior -> menor
 
     io.to(roomId).emit("allNumbers", result);
+  });
+
+  // 🚪 Sair da sala (botão Sair)
+  socket.on("leaveRoom", (roomId) => {
+    roomId = (roomId || "").trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room) return;
+
+    // Se for o mestre: fecha a sala pra todo mundo
+    if (socket.id === room.masterId) {
+      closeRoom(roomId);
+      return;
+    }
+
+    // Se for jogador: remove só ele
+    if (room.players[socket.id]) {
+      delete room.players[socket.id];
+      delete room.numbers[socket.id];
+      socket.leave(roomId);
+      emitPlayersUpdate(roomId);
+
+      if (Object.keys(room.players).length === 0) {
+        delete rooms[roomId];
+      }
+    }
   });
 
   // 🔌 Desconectar (limpa sala)
@@ -124,19 +183,19 @@ io.on("connection", (socket) => {
       const room = rooms[roomId];
 
       if (room.players[socket.id]) {
+        const wasMaster = room.masterId === socket.id;
+
         delete room.players[socket.id];
         delete room.numbers[socket.id];
 
-        // Se o mestre saiu, passa o cargo
-        if (room.masterId === socket.id) {
-          const remaining = Object.keys(room.players);
-          room.masterId = remaining.length ? remaining[0] : null;
-          if (room.masterId) io.to(room.masterId).emit("master");
+        // Se o mestre caiu/desconectou: fecha a sala
+        if (wasMaster) {
+          closeRoom(roomId);
+          continue;
         }
 
-        io.to(roomId).emit("playersUpdate", Object.values(room.players));
+        emitPlayersUpdate(roomId);
 
-        // Apaga sala vazia
         if (Object.keys(room.players).length === 0) {
           delete rooms[roomId];
         }
