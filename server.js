@@ -26,30 +26,39 @@ const rooms = {};
 
 io.on("connection", (socket) => {
   
-  socket.on("createRoom", ({ roomId, password, masterName }) => {
-  if (rooms[roomId]) {
-    socket.emit("errorMessage", "Sala já existe");
-    return;
-  }
-    
-  rooms[roomId] = {
-    password,
-    masterId: socket.id,
-    players: {},
-    numbers: {}
-  };
+  function generateRoomId() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
 
-  rooms[roomId].players[socket.id] = masterName;
+io.on("connection", (socket) => {
 
-  socket.join(roomId);
+  socket.on("createRoom", ({ password, masterName }) => {
+    // gera um código único
+    let roomId = generateRoomId();
+    while (rooms[roomId]) roomId = generateRoomId();
 
-  socket.emit("master");
-  socket.emit("roomCreated", roomId);
-  io.to(roomId).emit(
-    "playersUpdate",
-    Object.values(rooms[roomId].players)
-  );
+    rooms[roomId] = {
+      password,
+      masterId: socket.id,
+      players: {},
+      numbers: {}
+    };
+
+    rooms[roomId].players[socket.id] = masterName;
+    socket.join(roomId);
+
+    socket.emit("master");
+    socket.emit("roomCreated", roomId);
+
+    io.to(roomId).emit("playersUpdate", Object.values(rooms[roomId].players));
+  });
+
+  // ... seu joinRoom, distribute, reveal, disconnect continuam como estão
 });
+
 
   socket.on("joinRoom", ({ roomId, password, playerName }) => {
     const room = rooms[roomId];
@@ -156,6 +165,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`ITO Online rodando na porta ${PORT}`);
 });
+
 
 
 
