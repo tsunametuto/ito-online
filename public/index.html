@@ -186,7 +186,7 @@
     // Já vem ordenado do maior para o menor (server), só renderiza
     socket.on("allNumbers", (data) => {
       const div = document.getElementById("allNumbers");
-      div.innerHTML = "<h3>🔥 Revelação (maior → menor) 🔥</h3>";
+      div.innerHTML = "<h3> Revelação </h3>";
       data.forEach(p => {
         div.innerHTML += `<p>${p.name} → <b>${p.number}</b></p>`;
       });
@@ -203,3 +203,4 @@
   </script>
 </body>
 </html>
+
