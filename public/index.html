@@ -1,133 +1,175 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-br">
 <head>
-<meta charset="UTF-8">
-<title>ITO Online</title>
-
-<style>
-  body {
-    margin: 0;
-    font-family: Arial, sans-serif;
-    background: #0b0b0b;
-    color: #eaeaea;
-    text-align: center;
-  }
-
-  input, button {
-    padding: 12px;
-    margin: 6px;
-    background: #1f1f1f;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-  }
-
-  button:hover {
-    background: #333;
-    cursor: pointer;
-  }
-
-  #number {
-    font-size: 52px;
-    margin-top: 20px;
-    color: #25D366;
-  }
-
-  #allNumbers {
-    margin-top: 20px;
-  }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ITO Online</title>
+  <style>
+    body { margin:0; font-family: Arial, sans-serif; background:#0b0b0b; color:#eaeaea; text-align:center; }
+    .card { max-width:520px; margin:18px auto; background:#111; padding:16px; border-radius:12px; }
+    input, button { width:100%; box-sizing:border-box; padding:12px; margin:8px 0; background:#1f1f1f; color:#fff; border:1px solid #333; border-radius:8px; }
+    button:hover { background:#2a2a2a; cursor:pointer; }
+    .row { display:flex; gap:10px; }
+    .row > * { flex:1; }
+    #number { font-size:44px; margin-top:10px; color:#25D366; }
+    ul { list-style:none; padding:0; margin:0; }
+    li { padding:6px 0; border-bottom:1px solid #222; }
+    .muted { color:#aaa; font-size:14px; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
 </head>
-
 <body>
 
-<h1>ITO Online 🎲</h1>
+  <h1>ITO Online 🎲</h1>
 
-<!-- LOBBY -->
-<div id="lobby">
-  <input id="name" placeholder="Seu nome">
-  <br>
-  <button onclick="join()">Entrar</button>
+  <!-- TELA INICIAL -->
+  <div id="screenJoin" class="card">
+    <input id="name" placeholder="Seu nome" maxlength="24" />
 
-  <h3>Jogadores na sala</h3>
-  <ul id="players"></ul>
-</div>
+    <div class="row">
+      <input id="roomId" placeholder="Código da sala (para entrar)" class="code" maxlength="6" />
+      <input id="password" placeholder="Senha da sala" maxlength="24" />
+    </div>
 
-<!-- JOGO -->
-<div id="game" style="display:none;">
-  <div id="masterControls" style="display:none;">
-    <button onclick="distribute()">Distribuir cartas</button>
-    <button onclick="reveal()">Revelar cartas</button>
-    <button onclick="leave()">Sair</button>
+    <div class="row">
+      <button onclick="createRoom()">Criar sala</button>
+      <button onclick="joinRoom()">Entrar na sala</button>
+    </div>
+
+    <p class="muted">
+      • Quem cria a sala vira mestre.<br>
+      • Para entrar: precisa do <b>código</b> e da <b>senha</b>.
+    </p>
   </div>
 
-  <div id="playerControls" style="display:none;">
-    <button onclick="leave()">Sair</button>
+  <!-- TELA DO JOGO -->
+  <div id="screenGame" class="card" style="display:none;">
+    <div id="roomInfo" class="muted"></div>
+
+    <div id="masterControls" style="display:none;">
+      <button onclick="distribute()">Distribuir cartas</button>
+      <button onclick="reveal()">Revelar cartas</button>
+    </div>
+
+    <div id="playerControls" style="display:none;">
+      <button onclick="leave()">Sair</button>
+    </div>
+
+    <div id="number"></div>
+    <div id="allNumbers"></div>
+
+    <h3>Jogadores na sala</h3>
+    <ul id="players"></ul>
   </div>
 
-  <div id="number"></div>
-  <div id="allNumbers"></div>
-</div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
 
-<script src="/socket.io/socket.io.js"></script>
-<script>
-  const socket = io();
-  let isMaster = false;
+    let currentRoomId = null;
+    let isMaster = false;
 
-  function join() {
-    const name = document.getElementById("name").value;
-    if (!name) return;
+    function normRoomId(v) {
+      return (v || "").trim().toUpperCase();
+    }
 
-    socket.emit("join", name);
-    document.getElementById("lobby").style.display = "none";
-    document.getElementById("game").style.display = "block";
-  }
+    function createRoom() {
+      const masterName = document.getElementById("name").value.trim();
+      const password = document.getElementById("password").value.trim();
 
-  function distribute() {
-    document.getElementById("allNumbers").innerHTML = "";
-    socket.emit("distribute");
-  }
+      if (!masterName) return alert("Coloque seu nome.");
+      if (!password) return alert("Coloque uma senha para a sala.");
 
-  function reveal() {
-    socket.emit("reveal");
-  }
+      socket.emit("createRoom", { password, masterName });
+    }
 
-  function leave() {
-    socket.emit("leave");
-    location.reload();
-  }
+    function joinRoom() {
+      const playerName = document.getElementById("name").value.trim();
+      const password = document.getElementById("password").value.trim();
+      const roomId = normRoomId(document.getElementById("roomId").value);
 
-  socket.on("players", (list) => {
-    const ul = document.getElementById("players");
-    ul.innerHTML = "";
-    list.forEach(p => {
-      const li = document.createElement("li");
-      li.innerText = p;
-      ul.appendChild(li);
+      if (!playerName) return alert("Coloque seu nome.");
+      if (!roomId) return alert("Coloque o código da sala.");
+      if (!password) return alert("Coloque a senha da sala.");
+
+      socket.emit("joinRoom", { roomId, password, playerName });
+    }
+
+    function distribute() {
+      if (!currentRoomId) return;
+      document.getElementById("allNumbers").innerHTML = "";
+      socket.emit("distribute", currentRoomId);
+    }
+
+    function reveal() {
+      if (!currentRoomId) return;
+      socket.emit("reveal", currentRoomId);
+    }
+
+    function leave() {
+      location.reload();
+    }
+
+    // ====== Eventos do servidor ======
+    socket.on("master", () => {
+      isMaster = true;
+      document.getElementById("masterControls").style.display = "block";
+      document.getElementById("playerControls").style.display = "none";
     });
-  });
 
-  socket.on("number", (n) => {
-    document.getElementById("number").innerText = `Seu número: ${n}`;
-  });
-
-  socket.on("allNumbers", (data) => {
-    const div = document.getElementById("allNumbers");
-    div.innerHTML = "<h3>Revelação 🎉</h3>";
-    data.forEach(p => {
-      div.innerHTML += `<p>${p.name} → ${p.number}</p>`;
+    socket.on("roomCreated", (roomId) => {
+      currentRoomId = roomId;
+      goToGameScreen();
+      updateRoomInfo();
+      // mestre também pode sair, então mostramos o botão Sair em playerControls se quiser — mantive só pros jogadores.
     });
-  });
 
-  socket.on("master", () => {
-    isMaster = true;
-    document.getElementById("masterControls").style.display = "block";
-  });
+    socket.on("joinedRoom", (roomId) => {
+      currentRoomId = roomId;
+      goToGameScreen();
+      isMaster = false;
+      document.getElementById("masterControls").style.display = "none";
+      document.getElementById("playerControls").style.display = "block";
+      updateRoomInfo();
+    });
 
-  socket.on("full", () => {
-    alert("Sala cheia!");
-  });
-</script>
+    socket.on("playersUpdate", (list) => {
+      const ul = document.getElementById("players");
+      ul.innerHTML = "";
+      list.forEach(name => {
+        const li = document.createElement("li");
+        li.textContent = name;
+        ul.appendChild(li);
+      });
+    });
 
+    socket.on("number", (n) => {
+      document.getElementById("number").innerText = `Seu número: ${n}`;
+    });
+
+    socket.on("allNumbers", (data) => {
+      const div = document.getElementById("allNumbers");
+      div.innerHTML = "<h3>🔥 Revelação 🔥</h3>";
+      data.forEach(p => {
+        div.innerHTML += `<p>${p.name} → ${p.number}</p>`;
+      });
+    });
+
+    socket.on("errorMessage", (msg) => {
+      alert(msg);
+    });
+
+    function goToGameScreen() {
+      document.getElementById("screenJoin").style.display = "none";
+      document.getElementById("screenGame").style.display = "block";
+    }
+
+    function updateRoomInfo() {
+      const info = document.getElementById("roomInfo");
+      info.innerHTML = currentRoomId
+        ? `Sala: <span class="code"><b>${currentRoomId}</b></span> ${isMaster ? "(mestre)" : ""}`
+        : "";
+    }
+  </script>
 </body>
 </html>
