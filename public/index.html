@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>ITO Online</title>
+
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #0b0b0b;
+    color: #eaeaea;
+    text-align: center;
+  }
+
+  input, button {
+    padding: 12px;
+    margin: 6px;
+    background: #1f1f1f;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+  }
+
+  button:hover {
+    background: #333;
+    cursor: pointer;
+  }
+
+  #number {
+    font-size: 52px;
+    margin-top: 20px;
+    color: #25D366;
+  }
+
+  #allNumbers {
+    margin-top: 20px;
+  }
+</style>
+</head>
+
+<body>
+
+<h1>ITO Online 🎲</h1>
+
+<!-- LOBBY -->
+<div id="lobby">
+  <input id="name" placeholder="Seu nome">
+  <br>
+  <button onclick="join()">Entrar</button>
+
+  <h3>Jogadores na sala</h3>
+  <ul id="players"></ul>
+</div>
+
+<!-- JOGO -->
+<div id="game" style="display:none;">
+  <div id="masterControls" style="display:none;">
+    <button onclick="distribute()">Distribuir cartas</button>
+    <button onclick="reveal()">Revelar cartas</button>
+    <button onclick="leave()">Sair</button>
+  </div>
+
+  <div id="playerControls" style="display:none;">
+    <button onclick="leave()">Sair</button>
+  </div>
+
+  <div id="number"></div>
+  <div id="allNumbers"></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  let isMaster = false;
+
+  function join() {
+    const name = document.getElementById("name").value;
+    if (!name) return;
+
+    socket.emit("join", name);
+    document.getElementById("lobby").style.display = "none";
+    document.getElementById("game").style.display = "block";
+  }
+
+  function distribute() {
+    document.getElementById("allNumbers").innerHTML = "";
+    socket.emit("distribute");
+  }
+
+  function reveal() {
+    socket.emit("reveal");
+  }
+
+  function leave() {
+    socket.emit("leave");
+    location.reload();
+  }
+
+  socket.on("players", (list) => {
+    const ul = document.getElementById("players");
+    ul.innerHTML = "";
+    list.forEach(p => {
+      const li = document.createElement("li");
+      li.innerText = p;
+      ul.appendChild(li);
+    });
+  });
+
+  socket.on("number", (n) => {
+    document.getElementById("number").innerText = `Seu número: ${n}`;
+  });
+
+  socket.on("allNumbers", (data) => {
+    const div = document.getElementById("allNumbers");
+    div.innerHTML = "<h3>Revelação 🎉</h3>";
+    data.forEach(p => {
+      div.innerHTML += `<p>${p.name} → ${p.number}</p>`;
+    });
+  });
+
+  socket.on("master", () => {
+    isMaster = true;
+    document.getElementById("masterControls").style.display = "block";
+  });
+
+  socket.on("full", () => {
+    alert("Sala cheia!");
+  });
+</script>
+
+</body>
+</html>
