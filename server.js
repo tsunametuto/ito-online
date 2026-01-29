@@ -147,7 +147,7 @@ io.on("connection", (socket) => {
         name: room.players[playerId],
         number: room.numbers[playerId],
       }))
-      .sort((a, b) => (b.number ?? -1) - (a.number ?? -1)); // maior -> menor
+      .sort((a, b) => (b.number ?? -1) - (a.number ?? -1));
 
     io.to(roomId).emit("allNumbers", result);
   });
@@ -208,3 +208,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`ITO Online rodando na porta ${PORT}`);
 });
+
