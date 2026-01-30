@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>ITO</title>
+  <style>
+    body{margin:0;font-family:Arial;background:#050505;color:#fff;text-align:center;padding:20px}
+    .wrap{max-width:720px;margin:0 auto}
+    .card{background:#0b0b0b;border:1px solid #1f1f1f;border-radius:12px;padding:16px;margin:14px 0}
+    .btn{width:100%;padding:14px;border-radius:10px;border:1px solid #1f1f1f;background:#5b0a63;color:#fff;font-weight:800;font-size:18px;text-transform:uppercase;cursor:pointer}
+    .btn:hover{background:#6d0d77}
+    .btn.secondary{background:transparent;color:#ccc;text-transform:none;font-weight:600}
+    input{width:100%;padding:14px;border-radius:10px;border:1px solid #1f1f1f;background:#111;color:#fff;font-size:16px}
+    #number{font-size:44px;color:#25D366;margin:12px 0}
+    ul{list-style:none;padding:0;margin:0}
+    li{padding:8px;border-bottom:1px solid #161616;display:flex;justify-content:space-between}
+    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>ITO 🎲</h1>
+
+    <div class="card" id="topInfo">
+      <div>Sala: <span class="code" id="roomIdText">------</span></div>
+      <div>Você: <b id="nameText"></b></div>
+      <div id="roleText" style="color:#aaa;margin-top:6px;"></div>
+    </div>
+
+    <!-- pedir senha para entrar (se necessário) -->
+    <div class="card" id="passwordCard">
+      <input id="passwordInput" placeholder="Digite a senha da sala" />
+      <button class="btn" id="btnEnter">Entrar</button>
+      <div style="color:#aaa;font-size:13px;margin-top:8px;">(A senha não fica salva. É só para entrar.)</div>
+    </div>
+
+    <div class="card" id="gameCard" style="display:none;">
+      <div id="masterControls" style="display:none;">
+        <button class="btn" id="btnDistribute">Distribuir cartas</button>
+        <button class="btn" id="btnReveal" style="margin-top:10px;">Revelar cartas</button>
+      </div>
+
+      <button class="btn secondary" id="btnLeave" style="margin-top:10px;">Sair</button>
+
+      <div id="number"></div>
+      <div id="allNumbers"></div>
+
+      <h3>Jogadores</h3>
+      <ul id="players"></ul>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const qs = new URLSearchParams(location.search);
+    const roomId = (qs.get("room") || "").trim().toUpperCase();
+    const name = (qs.get("name") || "").trim();
+
+    document.getElementById("roomIdText").textContent = roomId || "??????";
+    document.getElementById("nameText").textContent = name || "Sem nome";
+
+    let isMaster = false;
+
+    function showGame() {
+      document.getElementById("passwordCard").style.display = "none";
+      document.getElementById("gameCard").style.display = "block";
+    }
+
+    function joinWithPassword() {
+      const password = document.getElementById("passwordInput").value.trim();
+      if (!roomId) return alert("Faltou o código da sala. Volte e entre novamente.");
+      if (!name) return alert("Faltou seu nome. Volte e entre novamente.");
+      if (!password) return alert("Digite a senha.");
+
+      socket.emit("joinRoom", { roomId, password, playerName: name });
+    }
+
+    document.getElementById("btnEnter").onclick = joinWithPassword;
+
+    document.getElementById("btnDistribute").onclick = () => {
+      socket.emit("distribute", roomId);
+      document.getElementById("allNumbers").innerHTML = "";
+    };
+
+    document.getElementById("btnReveal").onclick = () => {
+      socket.emit("reveal", roomId);
+    };
+
+    document.getElementById("btnLeave").onclick = () => {
+      socket.emit("leaveRoom", roomId);
+      // volta pro lobby
+      window.location.href = "/";
+    };
+
+    socket.on("errorMessage", (msg) => alert(msg));
+
+    socket.on("joinedRoom", () => {
+      showGame();
+      document.getElementById("roleText").textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
+    });
+
+    socket.on("master", () => {
+      isMaster = true;
+      document.getElementById("masterControls").style.display = "block";
+      document.getElementById("roleText").textContent = "Você é o mestre 👑";
+    });
+
+    // playersUpdate: pode ser array simples (nomes) OU objeto (se você usar a versão com coroa)
+    socket.on("playersUpdate", (payload) => {
+      const ul = document.getElementById("players");
+      ul.innerHTML = "";
+
+      // Caso simples: ["Ana","Beto"]
+      if (Array.isArray(payload)) {
+        payload.forEach(n => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span>${n}</span><span></span>`;
+          ul.appendChild(li);
+        });
+        return;
+      }
+
+      // Caso avançado: {players:[{name,isMaster}]}
+      if (payload && payload.players) {
+        payload.players.forEach(p => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
+          ul.appendChild(li);
+        });
+      }
+    });
+
+    socket.on("number", (n) => {
+      document.getElementById("number").textContent = `Seu número: ${n}`;
+    });
+
+    socket.on("allNumbers", (data) => {
+      const div = document.getElementById("allNumbers");
+      div.innerHTML = "<h3>Revelação (maior → menor)</h3>";
+      data.forEach(p => {
+        div.innerHTML += `<p>${p.name} → <b>${p.number}</b></p>`;
+      });
+    });
+
+    socket.on("roomClosed", () => {
+      alert("O mestre saiu. A sala foi fechada.");
+      window.location.href = "/";
+    });
+  </script>
+</body>
+</html>
