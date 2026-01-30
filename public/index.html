@@ -3,204 +3,288 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ITO Online</title>
+  <title>TBR</title>
   <style>
-    body { margin:0; font-family: Arial, sans-serif; background:#0b0b0b; color:#eaeaea; text-align:center; }
-    .card { max-width:520px; margin:18px auto; background:#111; padding:16px; border-radius:12px; }
-    input, button { width:100%; box-sizing:border-box; padding:12px; margin:8px 0; background:#1f1f1f; color:#fff; border:1px solid #333; border-radius:8px; }
-    button:hover { background:#2a2a2a; cursor:pointer; }
-    .row { display:flex; gap:10px; }
-    .row > * { flex:1; }
-    #number { font-size:44px; margin-top:10px; color:#25D366; }
-    ul { list-style:none; padding:0; margin:0; }
-    li { padding:6px 0; border-bottom:1px solid #222; display:flex; justify-content:space-between; align-items:center; }
-    .muted { color:#aaa; font-size:14px; }
-    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .crown { margin-left:8px; }
+    :root{
+      --bg:#050505;
+      --card:#0b0b0b;
+      --accent:#5b0a63;   /* roxo */
+      --accent2:#6d0d77;
+      --text:#ffffff;
+      --muted:#b9b9b9;
+      --border:#1f1f1f;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: Arial, sans-serif;
+      background:var(--bg);
+      color:var(--text);
+      display:flex;
+      min-height:100vh;
+      align-items:center;
+      justify-content:center;
+      padding:22px;
+    }
+    .wrap{width:min(720px, 100%);}
+    h1{
+      text-align:center;
+      font-size:64px;
+      margin:0 0 18px 0;
+      letter-spacing:2px;
+    }
+    .panel{
+      background:transparent;
+      padding:0;
+    }
+    .row{display:flex; gap:14px;}
+    .row > *{flex:1}
+    .field, .btn, select{
+      width:100%;
+      padding:18px 16px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      background:var(--accent);
+      color:var(--text);
+      font-weight:700;
+      font-size:22px;
+      text-transform:uppercase;
+      outline:none;
+    }
+    .field::placeholder{color:#f1dff3; opacity:.75}
+    select{
+      appearance:none;
+      background:var(--accent);
+    }
+    .btn{
+      cursor:pointer;
+      background:var(--accent);
+      transition:.15s;
+    }
+    .btn:hover{background:var(--accent2)}
+    .btn.secondary{
+      background:transparent;
+      border:1px solid #2a2a2a;
+      color:var(--muted);
+      font-weight:600;
+      text-transform:none;
+      font-size:16px;
+      padding:12px 14px;
+      border-radius:10px;
+    }
+    .hint{
+      text-align:center;
+      color:var(--muted);
+      margin-top:10px;
+      font-size:14px;
+      line-height:1.35;
+    }
+    .codeBox{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:12px;
+      padding:18px 16px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      background:var(--accent);
+      font-weight:900;
+      font-size:30px;
+      letter-spacing:4px;
+      user-select:text;
+    }
+    .topActions{
+      display:flex;
+      justify-content:flex-start;
+      margin:0 0 12px 0;
+    }
+    .hidden{display:none !important;}
+    .small{
+      font-size:14px;
+      color:var(--muted);
+      text-align:center;
+      margin-top:8px;
+    }
   </style>
 </head>
 <body>
+  <div class="wrap">
+    <h1>TBR</h1>
 
-  <h1>ITO Online 🎲</h1>
+    <!-- ETAPA 1 -->
+    <div id="step1" class="panel">
+      <select id="gameSelect" class="field">
+        <option value="ito">JOGO</option>
+        <option value="quem-sou-eu">QUEM SOU EU?</option>
+        <option value="impostor">IMPOSTOR</option>
+      </select>
 
-  <!-- TELA INICIAL -->
-  <div id="screenJoin" class="card">
-    <input id="name" placeholder="Seu nome" maxlength="24" />
+      <input id="nickname" class="field" placeholder="APELIDO" maxlength="20" />
 
-    <div class="row">
-      <input id="roomId" placeholder="Código da sala (para entrar)" class="code" maxlength="6" />
-      <input id="password" placeholder="Senha da sala" maxlength="24" />
+      <div class="row">
+        <button class="btn" id="btnGoCreate">CRIAR</button>
+        <button class="btn" id="btnGoJoin">ENTRAR</button>
+      </div>
+
+      <div class="hint">
+        Você escolhe o jogo e seu apelido.<br/>
+        Depois decide se vai <b>criar</b> ou <b>entrar</b> em uma sala.
+      </div>
     </div>
 
-    <div class="row">
-      <button onclick="createRoom()">Criar sala</button>
-      <button onclick="joinRoom()">Entrar na sala</button>
+    <!-- ETAPA 2 (MESTRE) -->
+    <div id="step2" class="panel hidden">
+      <div class="topActions">
+        <button class="btn secondary" id="back2">← Voltar</button>
+      </div>
+
+      <div class="codeBox">
+        <span id="generatedCode">------</span>
+        <button class="btn secondary" id="copyCode">Copiar</button>
+      </div>
+
+      <input id="masterPassword" class="field" placeholder="SENHA" maxlength="24" />
+
+      <button class="btn" id="btnCreateRoomFinal">CRIAR</button>
+
+      <div class="small">
+        Compartilhe o <b>código</b> + a <b>senha</b> com os jogadores.
+      </div>
     </div>
 
-    <p class="muted">
-      • Quem cria a sala vira mestre.<br>
-      • Para entrar: precisa do <b>código</b> e da <b>senha</b>.
-    </p>
-  </div>
+    <!-- ETAPA 3 (JOGADOR) -->
+    <div id="step3" class="panel hidden">
+      <div class="topActions">
+        <button class="btn secondary" id="back3">← Voltar</button>
+      </div>
 
-  <!-- TELA DO JOGO -->
-  <div id="screenGame" class="card" style="display:none;">
-    <div id="roomInfo" class="muted"></div>
+      <div class="row">
+        <input id="joinCode" class="field" placeholder="CÓDIGO" maxlength="6" />
+        <input id="joinPassword" class="field" placeholder="SENHA" maxlength="24" />
+      </div>
 
-    <div id="masterControls" style="display:none;">
-      <button onclick="distribute()">Distribuir cartas</button>
-      <button onclick="reveal()">Revelar cartas</button>
+      <button class="btn" id="btnJoinRoomFinal">ENTRAR</button>
+
+      <div class="small">
+        Digite o código e a senha que o mestre te enviou.
+      </div>
     </div>
-
-    <!-- Botão Sair para TODOS (inclusive mestre) -->
-    <button onclick="leave()" style="margin-top:10px;">Sair</button>
-
-    <div id="number"></div>
-    <div id="allNumbers"></div>
-
-    <h3>Jogadores na sala</h3>
-    <ul id="players"></ul>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
 
-    let currentRoomId = null;
-    let isMaster = false;
+    // estado local
+    let selectedGame = "ito";
+    let nickname = "";
+    let pendingRoomCode = "";
 
-    function normRoomId(v) {
-      return (v || "").trim().toUpperCase();
+    function show(step){
+      document.getElementById("step1").classList.add("hidden");
+      document.getElementById("step2").classList.add("hidden");
+      document.getElementById("step3").classList.add("hidden");
+      document.getElementById(step).classList.remove("hidden");
     }
 
-    function createRoom() {
-      const masterName = document.getElementById("name").value.trim();
-      const password = document.getElementById("password").value.trim();
-
-      if (!masterName) return alert("Coloque seu nome.");
-      if (!password) return alert("Coloque uma senha para a sala.");
-
-      socket.emit("createRoom", { password, masterName });
+    function generateCode(){
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      let out = "";
+      for(let i=0;i<6;i++) out += chars[Math.floor(Math.random()*chars.length)];
+      return out;
     }
 
-    function joinRoom() {
-      const playerName = document.getElementById("name").value.trim();
-      const password = document.getElementById("password").value.trim();
-      const roomId = normRoomId(document.getElementById("roomId").value);
+    // Etapa 1 -> escolher jogo/apelido
+    const gameSelect = document.getElementById("gameSelect");
+    const nickInput = document.getElementById("nickname");
 
-      if (!playerName) return alert("Coloque seu nome.");
-      if (!roomId) return alert("Coloque o código da sala.");
-      if (!password) return alert("Coloque a senha da sala.");
+    // recuperar apelido salvo
+    const savedNick = localStorage.getItem("tbr_nick");
+    if (savedNick) nickInput.value = savedNick;
 
-      socket.emit("joinRoom", { roomId, password, playerName });
-    }
+    document.getElementById("btnGoCreate").onclick = () => {
+      selectedGame = gameSelect.value;
+      nickname = nickInput.value.trim();
+      if (!nickname) return alert("Coloque um apelido.");
 
-    function distribute() {
-      if (!currentRoomId) return;
-      document.getElementById("allNumbers").innerHTML = "";
-      socket.emit("distribute", currentRoomId);
-    }
+      localStorage.setItem("tbr_nick", nickname);
 
-    function reveal() {
-      if (!currentRoomId) return;
-      socket.emit("reveal", currentRoomId);
-    }
+      pendingRoomCode = generateCode();
+      document.getElementById("generatedCode").textContent = pendingRoomCode;
 
-    function leave() {
-      if (!currentRoomId) return resetToJoin();
-      socket.emit("leaveRoom", currentRoomId);
-      // o servidor vai responder com roomClosed (se mestre) ou apenas atualizar lista (se jogador)
-      // pra garantir UX, já voltamos:
-      resetToJoin();
-    }
+      document.getElementById("masterPassword").value = "";
+      show("step2");
+    };
 
-    function resetToJoin() {
-      currentRoomId = null;
-      isMaster = false;
-      document.getElementById("number").innerText = "";
-      document.getElementById("allNumbers").innerHTML = "";
-      document.getElementById("players").innerHTML = "";
-      document.getElementById("roomInfo").innerHTML = "";
-      document.getElementById("masterControls").style.display = "none";
-      document.getElementById("screenGame").style.display = "none";
-      document.getElementById("screenJoin").style.display = "block";
-    }
+    document.getElementById("btnGoJoin").onclick = () => {
+      selectedGame = gameSelect.value;
+      nickname = nickInput.value.trim();
+      if (!nickname) return alert("Coloque um apelido.");
 
-    function goToGameScreen() {
-      document.getElementById("screenJoin").style.display = "none";
-      document.getElementById("screenGame").style.display = "block";
-    }
+      localStorage.setItem("tbr_nick", nickname);
 
-    function updateRoomInfo() {
-      const info = document.getElementById("roomInfo");
-      info.innerHTML = currentRoomId
-        ? `Sala: <span class="code"><b>${currentRoomId}</b></span> ${isMaster ? "(mestre)" : ""}`
-        : "";
-    }
+      document.getElementById("joinCode").value = "";
+      document.getElementById("joinPassword").value = "";
+      show("step3");
+    };
 
-    // ====== Eventos do servidor ======
-    socket.on("master", () => {
-      isMaster = true;
-      document.getElementById("masterControls").style.display = "block";
-      updateRoomInfo();
-    });
+    // Voltar
+    document.getElementById("back2").onclick = () => show("step1");
+    document.getElementById("back3").onclick = () => show("step1");
 
-    socket.on("roomCreated", (roomId) => {
-      currentRoomId = roomId;
-      goToGameScreen();
-      updateRoomInfo();
+    // copiar código
+    document.getElementById("copyCode").onclick = async () => {
+      try{
+        await navigator.clipboard.writeText(pendingRoomCode);
+        alert("Código copiado!");
+      }catch(e){
+        alert("Não deu pra copiar automaticamente. Copie manualmente: " + pendingRoomCode);
+      }
+    };
+
+    // Etapa 2 -> criar sala no servidor
+    document.getElementById("btnCreateRoomFinal").onclick = () => {
+      const password = document.getElementById("masterPassword").value.trim();
+      if (!password) return alert("Digite uma senha.");
+
+      socket.emit("createRoom", {
+        roomId: pendingRoomCode,
+        password,
+        masterName: nickname,
+        gameType: selectedGame
+      });
+    };
+
+    // Etapa 3 -> entrar na sala
+    document.getElementById("btnJoinRoomFinal").onclick = () => {
+      const roomId = document.getElementById("joinCode").value.trim().toUpperCase();
+      const password = document.getElementById("joinPassword").value.trim();
+
+      if (!roomId) return alert("Digite o código.");
+      if (!password) return alert("Digite a senha.");
+
+      socket.emit("joinRoom", {
+        roomId,
+        password,
+        playerName: nickname,
+        gameType: selectedGame
+      });
+    };
+
+    // respostas do servidor
+    socket.on("errorMessage", (msg) => alert(msg));
+
+    socket.on("roomCreated", ({ roomId }) => {
+      // Aqui é onde você decide: ir para tela do jogo (ITO etc).
+      // Por enquanto, só confirmo:
+      alert("Sala criada! Código: " + roomId);
+      // TODO: redirecionar para /games/ito.html ou abrir tela do jogo
     });
 
     socket.on("joinedRoom", (roomId) => {
-      currentRoomId = roomId;
-      isMaster = false;
-      document.getElementById("masterControls").style.display = "none";
-      goToGameScreen();
-      updateRoomInfo();
-    });
-
-    // playersUpdate agora vem como objeto com info do mestre
-    socket.on("playersUpdate", ({ players }) => {
-      const ul = document.getElementById("players");
-      ul.innerHTML = "";
-
-      players.forEach(p => {
-        const li = document.createElement("li");
-
-        const left = document.createElement("span");
-        left.textContent = p.name;
-
-        const right = document.createElement("span");
-        right.innerHTML = p.isMaster ? `<span class="crown">👑</span>` : "";
-
-        li.appendChild(left);
-        li.appendChild(right);
-        ul.appendChild(li);
-      });
-    });
-
-    socket.on("number", (n) => {
-      document.getElementById("number").innerText = `Seu número: ${n}`;
-    });
-
-    // Já vem ordenado do maior para o menor (server), só renderiza
-    socket.on("allNumbers", (data) => {
-      const div = document.getElementById("allNumbers");
-      div.innerHTML = "<h3> Revelação </h3>";
-      data.forEach(p => {
-        div.innerHTML += `<p>${p.name} → <b>${p.number}</b></p>`;
-      });
-    });
-
-    socket.on("roomClosed", () => {
-      alert("O mestre saiu. A sala foi fechada.");
-      resetToJoin();
-    });
-
-    socket.on("errorMessage", (msg) => {
-      alert(msg);
+      alert("Entrou na sala " + roomId + "!");
+      // TODO: redirecionar para a tela do jogo
     });
   </script>
 </body>
 </html>
-
