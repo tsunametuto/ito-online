@@ -7,8 +7,7 @@
   <style>
     :root{
       --bg:#050505;
-      --card:#0b0b0b;
-      --accent:#5b0a63;   /* roxo */
+      --accent:#5b0a63;
       --accent2:#6d0d77;
       --text:#ffffff;
       --muted:#b9b9b9;
@@ -33,10 +32,6 @@
       margin:0 0 18px 0;
       letter-spacing:2px;
     }
-    .panel{
-      background:transparent;
-      padding:0;
-    }
     .row{display:flex; gap:14px;}
     .row > *{flex:1}
     .field, .btn, select{
@@ -52,15 +47,8 @@
       outline:none;
     }
     .field::placeholder{color:#f1dff3; opacity:.75}
-    select{
-      appearance:none;
-      background:var(--accent);
-    }
-    .btn{
-      cursor:pointer;
-      background:var(--accent);
-      transition:.15s;
-    }
+    select{appearance:none;}
+    .btn{cursor:pointer; transition:.15s;}
     .btn:hover{background:var(--accent2)}
     .btn.secondary{
       background:transparent;
@@ -93,18 +81,9 @@
       letter-spacing:4px;
       user-select:text;
     }
-    .topActions{
-      display:flex;
-      justify-content:flex-start;
-      margin:0 0 12px 0;
-    }
+    .topActions{display:flex; justify-content:flex-start; margin:0 0 12px 0;}
     .hidden{display:none !important;}
-    .small{
-      font-size:14px;
-      color:var(--muted);
-      text-align:center;
-      margin-top:8px;
-    }
+    .small{font-size:14px; color:var(--muted); text-align:center; margin-top:8px;}
   </style>
 </head>
 <body>
@@ -112,7 +91,7 @@
     <h1>TBR</h1>
 
     <!-- ETAPA 1 -->
-    <div id="step1" class="panel">
+    <div id="step1">
       <select id="gameSelect" class="field">
         <option value="ito">JOGO</option>
         <option value="quem-sou-eu">QUEM SOU EU?</option>
@@ -133,7 +112,7 @@
     </div>
 
     <!-- ETAPA 2 (MESTRE) -->
-    <div id="step2" class="panel hidden">
+    <div id="step2" class="hidden">
       <div class="topActions">
         <button class="btn secondary" id="back2">← Voltar</button>
       </div>
@@ -144,7 +123,6 @@
       </div>
 
       <input id="masterPassword" class="field" placeholder="SENHA" maxlength="24" />
-
       <button class="btn" id="btnCreateRoomFinal">CRIAR</button>
 
       <div class="small">
@@ -153,7 +131,7 @@
     </div>
 
     <!-- ETAPA 3 (JOGADOR) -->
-    <div id="step3" class="panel hidden">
+    <div id="step3" class="hidden">
       <div class="topActions">
         <button class="btn secondary" id="back3">← Voltar</button>
       </div>
@@ -175,7 +153,6 @@
   <script>
     const socket = io();
 
-    // estado local
     let selectedGame = "ito";
     let nickname = "";
     let pendingRoomCode = "";
@@ -194,11 +171,9 @@
       return out;
     }
 
-    // Etapa 1 -> escolher jogo/apelido
     const gameSelect = document.getElementById("gameSelect");
     const nickInput = document.getElementById("nickname");
 
-    // recuperar apelido salvo
     const savedNick = localStorage.getItem("tbr_nick");
     if (savedNick) nickInput.value = savedNick;
 
@@ -228,11 +203,9 @@
       show("step3");
     };
 
-    // Voltar
     document.getElementById("back2").onclick = () => show("step1");
     document.getElementById("back3").onclick = () => show("step1");
 
-    // copiar código
     document.getElementById("copyCode").onclick = async () => {
       try{
         await navigator.clipboard.writeText(pendingRoomCode);
@@ -242,10 +215,14 @@
       }
     };
 
-    // Etapa 2 -> criar sala no servidor
+    // Etapa 2 -> criar sala
     document.getElementById("btnCreateRoomFinal").onclick = () => {
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
+
+      // 👑 salva senha só no navegador do mestre, só pra não pedir de novo no jogo
+      sessionStorage.setItem("tbr_master_password", password);
+      sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
       socket.emit("createRoom", {
         roomId: pendingRoomCode,
@@ -266,24 +243,21 @@
       socket.emit("joinRoom", {
         roomId,
         password,
-        playerName: nickname,
-        gameType: selectedGame
+        playerName: nickname
       });
     };
 
-    // respostas do servidor
     socket.on("errorMessage", (msg) => alert(msg));
 
-    socket.on("roomCreated", ({ roomId }) => {
-      // Aqui é onde você decide: ir para tela do jogo (ITO etc).
-      // Por enquanto, só confirmo:
-      alert("Sala criada! Código: " + roomId);
-      // TODO: redirecionar para /games/ito.html ou abrir tela do jogo
+    // ✅ redireciona para a página do jogo
+    socket.on("roomCreated", ({ roomId, gameType }) => {
+      const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
+      window.location.href = url;
     });
 
-    socket.on("joinedRoom", (roomId) => {
-      alert("Entrou na sala " + roomId + "!");
-      // TODO: redirecionar para a tela do jogo
+    socket.on("joinedRoom", ({ roomId, gameType }) => {
+      const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
+      window.location.href = url;
     });
   </script>
 </body>
