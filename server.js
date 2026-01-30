@@ -72,10 +72,8 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // normaliza gameType
     const gt = (gameType || "ito").toString().trim().toLowerCase();
 
-    // se o cliente mandou um código, validamos
     if (roomId) {
       roomId = String(roomId).trim().toUpperCase();
       const valid = /^[A-Z2-9]{6}$/.test(roomId);
@@ -88,7 +86,6 @@ io.on("connection", (socket) => {
         return;
       }
     } else {
-      // fallback: gerar no servidor
       let newId = generateRoomId();
       while (rooms[newId]) newId = generateRoomId();
       roomId = newId;
@@ -173,19 +170,18 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("allNumbers", result);
   });
 
-  // 🚪 Sair da sala (botão Sair)
+  // 🚪 Sair da sala
   socket.on("leaveRoom", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    // se mestre: fecha sala
+    // mestre fecha sala
     if (socket.id === room.masterId) {
       closeRoom(roomId);
       return;
     }
 
-    // se jogador: remove só ele
     if (room.players[socket.id]) {
       delete room.players[socket.id];
       delete room.numbers[socket.id];
@@ -209,7 +205,7 @@ io.on("connection", (socket) => {
         delete room.players[socket.id];
         delete room.numbers[socket.id];
 
-        // se mestre caiu: fecha
+        // mestre caiu: fecha sala
         if (wasMaster) {
           closeRoom(roomId);
           continue;
