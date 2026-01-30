@@ -19,6 +19,7 @@ const MAX_PLAYERS_PER_ROOM = 8;
 const rooms = {};
 // roomId -> {
 //   password,
+//   gameType,
 //   masterId,
 //   players: {},   // socketId -> nome
 //   numbers: {}    // socketId -> numero
@@ -45,6 +46,7 @@ function emitPlayersUpdate(roomId) {
     roomId,
     players,
     masterId: room.masterId,
+    gameType: room.gameType,
   });
 }
 
@@ -52,10 +54,8 @@ function closeRoom(roomId) {
   const room = rooms[roomId];
   if (!room) return;
 
-  // avisa todo mundo que a sala fechou
   io.to(roomId).emit("roomClosed");
 
-  // faz os sockets saírem da sala (limpeza)
   for (const id of Object.keys(room.players)) {
     const s = io.sockets.sockets.get(id);
     if (s) s.leave(roomId);
@@ -66,57 +66,60 @@ function closeRoom(roomId) {
 
 io.on("connection", (socket) => {
   // ✅ Criar sala (mestre)
-  socket.on("roomCreated", ({ roomId, gameType }) => {
-  // redireciona para a página do jogo
-  const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
-  window.location.href = url;
-});
-
-  // se o cliente mandou um código (UX etapa 2), usamos ele
-  if (roomId) {
-    roomId = String(roomId).trim().toUpperCase();
-    const valid = /^[A-Z2-9]{6}$/.test(roomId);
-    if (!valid) {
-      socket.emit("errorMessage", "Código inválido. Use 6 caracteres (A-Z e 2-9).");
+  socket.on("createRoom", ({ roomId, password, masterName, gameType }) => {
+    if (!masterName || !password) {
+      socket.emit("errorMessage", "Informe seu nome e uma senha para criar a sala.");
       return;
     }
-    if (rooms[roomId]) {
-      socket.emit("errorMessage", "Esse código já está em uso. Gere outro.");
-      return;
+
+    // normaliza gameType
+    const gt = (gameType || "ito").toString().trim().toLowerCase();
+
+    // se o cliente mandou um código, validamos
+    if (roomId) {
+      roomId = String(roomId).trim().toUpperCase();
+      const valid = /^[A-Z2-9]{6}$/.test(roomId);
+      if (!valid) {
+        socket.emit("errorMessage", "Código inválido. Use 6 caracteres (A-Z e 2-9).");
+        return;
+      }
+      if (rooms[roomId]) {
+        socket.emit("errorMessage", "Esse código já está em uso. Gere outro.");
+        return;
+      }
+    } else {
+      // fallback: gerar no servidor
+      let newId = generateRoomId();
+      while (rooms[newId]) newId = generateRoomId();
+      roomId = newId;
     }
-  } else {
-    // fallback: gerar no servidor (caso futuro)
-    let newId = generateRoomId();
-    while (rooms[newId]) newId = generateRoomId();
-    roomId = newId;
-  }
 
-  rooms[roomId] = {
-    password,
-    gameType: gameType || "ito",
-    masterId: socket.id,
-    players: {},
-    numbers: {},
-  };
+    rooms[roomId] = {
+      password,
+      gameType: gt,
+      masterId: socket.id,
+      players: {},
+      numbers: {},
+    };
 
-  rooms[roomId].players[socket.id] = masterName;
-  socket.join(roomId);
+    rooms[roomId].players[socket.id] = masterName;
+    socket.join(roomId);
 
-  socket.emit("master");
-  socket.emit("roomCreated", { roomId, gameType: rooms[roomId].gameType });
+    socket.emit("master");
+    socket.emit("roomCreated", { roomId, gameType: rooms[roomId].gameType });
 
-  // Se você ainda usa playersUpdate simples, pode manter assim:
-  io.to(roomId).emit("playersUpdate", Object.values(rooms[roomId].players));
-});
-
+    emitPlayersUpdate(roomId);
+  });
 
   // ✅ Entrar em sala (jogador)
-  socket.on("joinedRoom", (roomId) => {
-  // como o joinRoom do server devolve roomId (string)
-  const gameType = selectedGame;
-  const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
-  window.location.href = url;
-});
+  socket.on("joinRoom", ({ roomId, password, playerName }) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+
+    if (!room) {
+      socket.emit("errorMessage", "Sala não existe");
+      return;
+    }
 
     if (room.password !== password) {
       socket.emit("errorMessage", "Senha incorreta");
@@ -128,16 +131,16 @@ io.on("connection", (socket) => {
       return;
     }
 
-    room.players[socket.id] = playerName;
+    room.players[socket.id] = playerName || "Jogador";
     socket.join(roomId);
 
-    socket.emit("joinedRoom", roomId);
+    socket.emit("joinedRoom", { roomId, gameType: room.gameType });
     emitPlayersUpdate(roomId);
   });
 
   // 🎲 Distribuir números (por sala)
   socket.on("distribute", (roomId) => {
-    roomId = (roomId || "").trim().toUpperCase();
+    roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
@@ -152,9 +155,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  // 😈 Revelar números (por sala) - ordenado do maior pro menor
+  // 😈 Revelar números (por sala) - maior -> menor
   socket.on("reveal", (roomId) => {
-    roomId = (roomId || "").trim().toUpperCase();
+    roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
@@ -172,17 +175,17 @@ io.on("connection", (socket) => {
 
   // 🚪 Sair da sala (botão Sair)
   socket.on("leaveRoom", (roomId) => {
-    roomId = (roomId || "").trim().toUpperCase();
+    roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    // Se for o mestre: fecha a sala pra todo mundo
+    // se mestre: fecha sala
     if (socket.id === room.masterId) {
       closeRoom(roomId);
       return;
     }
 
-    // Se for jogador: remove só ele
+    // se jogador: remove só ele
     if (room.players[socket.id]) {
       delete room.players[socket.id];
       delete room.numbers[socket.id];
@@ -195,7 +198,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🔌 Desconectar (limpa sala)
+  // 🔌 Desconectar
   socket.on("disconnect", () => {
     for (const roomId in rooms) {
       const room = rooms[roomId];
@@ -206,7 +209,7 @@ io.on("connection", (socket) => {
         delete room.players[socket.id];
         delete room.numbers[socket.id];
 
-        // Se o mestre caiu/desconectou: fecha a sala
+        // se mestre caiu: fecha
         if (wasMaster) {
           closeRoom(roomId);
           continue;
@@ -224,8 +227,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`ITO Online rodando na porta ${PORT}`);
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
-
-
-
