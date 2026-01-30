@@ -66,11 +66,11 @@ function closeRoom(roomId) {
 
 io.on("connection", (socket) => {
   // ✅ Criar sala (mestre)
-  socket.on("createRoom", ({ roomId, password, masterName, gameType }) => {
-  if (!masterName || !password) {
-    socket.emit("errorMessage", "Informe seu nome e uma senha para criar a sala.");
-    return;
-  }
+  socket.on("roomCreated", ({ roomId, gameType }) => {
+  // redireciona para a página do jogo
+  const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
+  window.location.href = url;
+});
 
   // se o cliente mandou um código (UX etapa 2), usamos ele
   if (roomId) {
@@ -111,14 +111,12 @@ io.on("connection", (socket) => {
 
 
   // ✅ Entrar em sala (jogador)
-  socket.on("joinRoom", ({ roomId, password, playerName }) => {
-    roomId = (roomId || "").trim().toUpperCase();
-    const room = rooms[roomId];
-
-    if (!room) {
-      socket.emit("errorMessage", "Sala não existe");
-      return;
-    }
+  socket.on("joinedRoom", (roomId) => {
+  // como o joinRoom do server devolve roomId (string)
+  const gameType = selectedGame;
+  const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
+  window.location.href = url;
+});
 
     if (room.password !== password) {
       socket.emit("errorMessage", "Senha incorreta");
@@ -228,5 +226,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`ITO Online rodando na porta ${PORT}`);
 });
+
 
 
