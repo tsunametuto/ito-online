@@ -66,29 +66,49 @@ function closeRoom(roomId) {
 
 io.on("connection", (socket) => {
   // ✅ Criar sala (mestre)
-  socket.on("createRoom", ({ password, masterName }) => {
-    if (!masterName || !password) {
-      socket.emit("errorMessage", "Informe seu nome e uma senha para criar a sala.");
+  socket.on("createRoom", ({ roomId, password, masterName, gameType }) => {
+  if (!masterName || !password) {
+    socket.emit("errorMessage", "Informe seu nome e uma senha para criar a sala.");
+    return;
+  }
+
+  // se o cliente mandou um código (UX etapa 2), usamos ele
+  if (roomId) {
+    roomId = String(roomId).trim().toUpperCase();
+    const valid = /^[A-Z2-9]{6}$/.test(roomId);
+    if (!valid) {
+      socket.emit("errorMessage", "Código inválido. Use 6 caracteres (A-Z e 2-9).");
       return;
     }
+    if (rooms[roomId]) {
+      socket.emit("errorMessage", "Esse código já está em uso. Gere outro.");
+      return;
+    }
+  } else {
+    // fallback: gerar no servidor (caso futuro)
+    let newId = generateRoomId();
+    while (rooms[newId]) newId = generateRoomId();
+    roomId = newId;
+  }
 
-    let roomId = generateRoomId();
-    while (rooms[roomId]) roomId = generateRoomId();
+  rooms[roomId] = {
+    password,
+    gameType: gameType || "ito",
+    masterId: socket.id,
+    players: {},
+    numbers: {},
+  };
 
-    rooms[roomId] = {
-      password,
-      masterId: socket.id,
-      players: {},
-      numbers: {},
-    };
+  rooms[roomId].players[socket.id] = masterName;
+  socket.join(roomId);
 
-    rooms[roomId].players[socket.id] = masterName;
-    socket.join(roomId);
+  socket.emit("master");
+  socket.emit("roomCreated", { roomId, gameType: rooms[roomId].gameType });
 
-    socket.emit("master");
-    socket.emit("roomCreated", roomId);
-    emitPlayersUpdate(roomId);
-  });
+  // Se você ainda usa playersUpdate simples, pode manter assim:
+  io.to(roomId).emit("playersUpdate", Object.values(rooms[roomId].players));
+});
+
 
   // ✅ Entrar em sala (jogador)
   socket.on("joinRoom", ({ roomId, password, playerName }) => {
@@ -208,4 +228,5 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`ITO Online rodando na porta ${PORT}`);
 });
+
 
