@@ -28,11 +28,10 @@
       <div id="roleText" style="color:#aaa;margin-top:6px;"></div>
     </div>
 
-    <!-- pedir senha para entrar (se necessário) -->
     <div class="card" id="passwordCard">
       <input id="passwordInput" placeholder="Digite a senha da sala" />
       <button class="btn" id="btnEnter">Entrar</button>
-      <div style="color:#aaa;font-size:13px;margin-top:8px;">(A senha não fica salva. É só para entrar.)</div>
+      <div style="color:#aaa;font-size:13px;margin-top:8px;">(A senha não fica salva para jogadores.)</div>
     </div>
 
     <div class="card" id="gameCard" style="display:none;">
@@ -69,16 +68,31 @@
       document.getElementById("gameCard").style.display = "block";
     }
 
-    function joinWithPassword() {
+    function joinRoomWith(password) {
+      socket.emit("joinRoom", { roomId, password, playerName: name });
+    }
+
+    // Botão entrar (jogador)
+    document.getElementById("btnEnter").onclick = () => {
       const password = document.getElementById("passwordInput").value.trim();
       if (!roomId) return alert("Faltou o código da sala. Volte e entre novamente.");
       if (!name) return alert("Faltou seu nome. Volte e entre novamente.");
       if (!password) return alert("Digite a senha.");
+      joinRoomWith(password);
+    };
 
-      socket.emit("joinRoom", { roomId, password, playerName: name });
-    }
+    // Mestre: tenta auto-entrar sem pedir senha de novo
+    (function autoJoinIfMaster() {
+      const savedPass = sessionStorage.getItem("tbr_master_password");
+      const savedRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
 
-    document.getElementById("btnEnter").onclick = joinWithPassword;
+      if (savedPass && savedRoom && savedRoom === roomId) {
+        // tenta entrar automaticamente
+        joinRoomWith(savedPass);
+        // não mostramos o card de senha enquanto tenta
+        document.getElementById("passwordCard").style.display = "none";
+      }
+    })();
 
     document.getElementById("btnDistribute").onclick = () => {
       socket.emit("distribute", roomId);
@@ -91,11 +105,17 @@
 
     document.getElementById("btnLeave").onclick = () => {
       socket.emit("leaveRoom", roomId);
-      // volta pro lobby
+      // limpa credencial do mestre desse room
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
       window.location.href = "/";
     };
 
-    socket.on("errorMessage", (msg) => alert(msg));
+    socket.on("errorMessage", (msg) => {
+      alert(msg);
+      // se o autoJoin falhou (senha errada ou sala), mostra o card de senha de novo
+      document.getElementById("passwordCard").style.display = "block";
+    });
 
     socket.on("joinedRoom", () => {
       showGame();
@@ -108,26 +128,25 @@
       document.getElementById("roleText").textContent = "Você é o mestre 👑";
     });
 
-    // playersUpdate: pode ser array simples (nomes) OU objeto (se você usar a versão com coroa)
     socket.on("playersUpdate", (payload) => {
       const ul = document.getElementById("players");
       ul.innerHTML = "";
 
-      // Caso simples: ["Ana","Beto"]
-      if (Array.isArray(payload)) {
-        payload.forEach(n => {
+      // payload esperado: {players:[{name,isMaster}]}
+      if (payload && payload.players) {
+        payload.players.forEach(p => {
           const li = document.createElement("li");
-          li.innerHTML = `<span>${n}</span><span></span>`;
+          li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
           ul.appendChild(li);
         });
         return;
       }
 
-      // Caso avançado: {players:[{name,isMaster}]}
-      if (payload && payload.players) {
-        payload.players.forEach(p => {
+      // fallback antigo (array de nomes)
+      if (Array.isArray(payload)) {
+        payload.forEach(n => {
           const li = document.createElement("li");
-          li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
+          li.innerHTML = `<span>${n}</span><span></span>`;
           ul.appendChild(li);
         });
       }
@@ -147,6 +166,8 @@
 
     socket.on("roomClosed", () => {
       alert("O mestre saiu. A sala foi fechada.");
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
       window.location.href = "/";
     });
   </script>
