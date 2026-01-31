@@ -28,10 +28,9 @@
 
     <div class="card" id="step1">
       <select id="gameSelect">
-        <!-- values permanecem os mesmos (pastas/arquivos iguais) -->
         <option value="ito">De 1 a 100</option>
         <option value="quem-sou-eu">Eu sou…</option>
-        <option value="impostor">Infiltrado (em breve)</option>
+        <option value="impostor">Espião</option>
       </select>
 
       <input id="nickname" placeholder="Seu apelido" maxlength="20" />
@@ -83,7 +82,6 @@
   <script>
     const socket = io();
 
-    // playerToken persistente (não é senha; é só ID do jogador)
     function getPlayerToken(){
       let t = localStorage.getItem("tbr_player_token");
       if (!t) {
@@ -162,12 +160,10 @@
       }
     };
 
-    // Mestre -> criar sala
     document.getElementById("btnCreateRoomFinal").onclick = () => {
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
 
-      // senha só pra atravessar o redirecionamento (o jogo vai trocar por sessionKey)
       sessionStorage.setItem("tbr_master_password", password);
       sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
@@ -180,7 +176,6 @@
       });
     };
 
-    // Jogador -> entrar na sala
     document.getElementById("btnJoinRoomFinal").onclick = () => {
       const roomId = document.getElementById("joinCode").value.trim().toUpperCase();
       const password = document.getElementById("joinPassword").value.trim();
@@ -188,7 +183,6 @@
       if (!roomId) return alert("Digite o código.");
       if (!password) return alert("Digite a senha.");
 
-      // senha só pra atravessar o redirecionamento (o jogo vai trocar por sessionKey)
       sessionStorage.setItem("tbr_join_password", password);
       sessionStorage.setItem("tbr_join_room", roomId);
 
@@ -203,7 +197,6 @@
     socket.on("errorMessage", (msg) => alert(msg));
 
     socket.on("roomCreated", ({ roomId, gameType, sessionKey }) => {
-      // guarda sessionKey pro jogo usar (sem senha)
       sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
 
       window.location.href =
