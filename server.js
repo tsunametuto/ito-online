@@ -13,8 +13,18 @@ app.use(express.static("public"));
 
 const MAX_PLAYERS_PER_ROOM = 8;
 
+// tempo pra segurar sala vazia (troca de página / reload)
+const EMPTY_ROOM_GRACE_MS = 60_000;
+
 const rooms = {};
-// roomId -> { password, gameType, masterId, players:{}, numbers:{} }
+// roomId -> {
+//   password,
+//   gameType,
+//   masterId,
+//   players: {},
+//   numbers: {},
+//   emptyTimer: Timeout|null
+// }
 
 function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -41,6 +51,36 @@ function emitPlayersUpdate(roomId) {
   });
 }
 
+function scheduleEmptyRoomDeletion(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  // já tem timer
+  if (room.emptyTimer) return;
+
+  room.emptyTimer = setTimeout(() => {
+    const r = rooms[roomId];
+    if (!r) return;
+
+    // se ainda estiver vazia, apaga
+    if (Object.keys(r.players).length === 0) {
+      delete rooms[roomId];
+    } else {
+      // alguém entrou, não apaga
+      r.emptyTimer = null;
+    }
+  }, EMPTY_ROOM_GRACE_MS);
+}
+
+function cancelEmptyRoomDeletion(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+  if (room.emptyTimer) {
+    clearTimeout(room.emptyTimer);
+    room.emptyTimer = null;
+  }
+}
+
 function closeRoom(roomId) {
   const room = rooms[roomId];
   if (!room) return;
@@ -52,6 +92,7 @@ function closeRoom(roomId) {
     if (s) s.leave(roomId);
   }
 
+  cancelEmptyRoomDeletion(roomId);
   delete rooms[roomId];
 }
 
@@ -65,7 +106,6 @@ io.on("connection", (socket) => {
 
     const gt = (gameType || "ito").toString().trim().toLowerCase();
 
-    // valida roomId vindo do cliente (UX)
     if (roomId) {
       roomId = String(roomId).trim().toUpperCase();
       const valid = /^[A-Z2-9]{6}$/.test(roomId);
@@ -89,6 +129,7 @@ io.on("connection", (socket) => {
       masterId: socket.id,
       players: {},
       numbers: {},
+      emptyTimer: null,
     };
 
     rooms[roomId].players[socket.id] = masterName;
@@ -109,10 +150,15 @@ io.on("connection", (socket) => {
       socket.emit("errorMessage", "Sala não existe");
       return;
     }
+
+    // se alguém entrou, cancela o timer de sala vazia
+    cancelEmptyRoomDeletion(roomId);
+
     if (room.password !== password) {
       socket.emit("errorMessage", "Senha incorreta");
       return;
     }
+
     if (Object.keys(room.players).length >= MAX_PLAYERS_PER_ROOM) {
       socket.emit("errorMessage", "Sala cheia");
       return;
@@ -123,8 +169,7 @@ io.on("connection", (socket) => {
 
     socket.emit("joinedRoom", { roomId, gameType: room.gameType });
 
-    // Se por acaso não existir mestre (pode acontecer se o mestre caiu),
-    // o primeiro que entrar vira mestre
+    // se por algum motivo não existir mestre, o primeiro vira
     if (!room.masterId) {
       room.masterId = socket.id;
       io.to(socket.id).emit("master");
@@ -133,7 +178,7 @@ io.on("connection", (socket) => {
     emitPlayersUpdate(roomId);
   });
 
-  // Distribuir (só mestre)
+  // Distribuir
   socket.on("distribute", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
@@ -149,7 +194,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Revelar (só mestre) - maior -> menor
+  // Revelar (maior -> menor)
   socket.on("reveal", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
@@ -166,14 +211,14 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("allNumbers", result);
   });
 
-  // Sair (botão sair)
+  // Sair (botão)
   socket.on("leaveRoom", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    // Se mestre clicou sair: FECHA sala (como você quer)
     if (socket.id === room.masterId) {
+      // mestre clicou sair: fecha geral
       closeRoom(roomId);
       return;
     }
@@ -187,38 +232,36 @@ io.on("connection", (socket) => {
       emitPlayersUpdate(roomId);
 
       if (Object.keys(room.players).length === 0) {
+        // aqui pode apagar direto, porque foi "sair" explícito
+        cancelEmptyRoomDeletion(roomId);
         delete rooms[roomId];
       }
     }
   });
 
-  // Disconnect (reload/troca de página etc.)
+  // Disconnect (troca de página / reload)
   socket.on("disconnect", () => {
     for (const roomId in rooms) {
       const room = rooms[roomId];
+      if (!room.players[socket.id]) continue;
 
-      if (room.players[socket.id]) {
-        const wasMaster = room.masterId === socket.id;
+      const wasMaster = room.masterId === socket.id;
 
-        delete room.players[socket.id];
-        delete room.numbers[socket.id];
+      delete room.players[socket.id];
+      delete room.numbers[socket.id];
 
-        // ✅ IMPORTANTE: NÃO fecha a sala no disconnect do mestre
-        // (isso evita matar a sala quando ele muda de página)
-        if (wasMaster) {
-          const remaining = Object.keys(room.players);
-          room.masterId = remaining.length ? remaining[0] : null;
+      // se mestre caiu, passa o cargo (não fecha!)
+      if (wasMaster) {
+        const remaining = Object.keys(room.players);
+        room.masterId = remaining.length ? remaining[0] : null;
+        if (room.masterId) io.to(room.masterId).emit("master");
+      }
 
-          if (room.masterId) {
-            io.to(room.masterId).emit("master");
-          }
-        }
+      emitPlayersUpdate(roomId);
 
-        emitPlayersUpdate(roomId);
-
-        if (Object.keys(room.players).length === 0) {
-          delete rooms[roomId];
-        }
+      // ✅ se ficou vazia, NÃO apaga na hora: dá tempo pra voltar
+      if (Object.keys(room.players).length === 0) {
+        scheduleEmptyRoomDeletion(roomId);
       }
     }
   });
