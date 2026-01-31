@@ -26,22 +26,20 @@
 
     /* feedback botão clicado */
     button.pressed{
-  outline: 2px solid #7a5cff;
-  border-color: #7a5cff !important;
-  box-shadow: 0 0 0 2px rgba(122,92,255,.15);
-}
-
-button.good-pressed{
-  outline: 2px solid #2ecc71;
-  border-color: #2ecc71 !important;
-  box-shadow: 0 0 0 2px rgba(46,204,113,.15);
-}
-
-button.bad-pressed{
-  outline: 2px solid #ff4d4d;
-  border-color: #ff4d4d !important;
-  box-shadow: 0 0 0 2px rgba(255,77,77,.15);
-}
+      outline: 2px solid #7a5cff;
+      border-color: #7a5cff !important;
+      box-shadow: 0 0 0 2px rgba(122,92,255,.15);
+    }
+    button.good-pressed{
+      outline: 2px solid #2ecc71;
+      border-color: #2ecc71 !important;
+      box-shadow: 0 0 0 2px rgba(46,204,113,.15);
+    }
+    button.bad-pressed{
+      outline: 2px solid #ff4d4d;
+      border-color: #ff4d4d !important;
+      box-shadow: 0 0 0 2px rgba(255,77,77,.15);
+    }
 
     .big{font-size:20px;font-weight:900}
     .center{text-align:center}
@@ -110,7 +108,6 @@ button.bad-pressed{
 
     function setPressed(btn, type = "normal") {
       if (!btn) return;
-      // limpa só os botões do bloco do mestre + sair
       document.querySelectorAll("#masterControls button, #btnLeave").forEach(b => {
         b.classList.remove("pressed", "good-pressed", "bad-pressed");
       });
@@ -135,7 +132,7 @@ button.bad-pressed{
     // tenta reconectar/entrar na sala sem pedir senha de novo (sessionKey)
     socket.emit("joinRoom", {
       roomId,
-      password: "",          // não precisa (tem sessionKey)
+      password: "",
       playerName: nickname,
       playerToken,
       sessionKey
@@ -144,7 +141,7 @@ button.bad-pressed{
     let isMaster = false;
     let playersCache = [];
 
-    function renderPlayers(list, masterToken){
+    function renderPlayers(list){
       const wrap = document.getElementById("players");
       wrap.innerHTML = "";
       playersCache = list;
@@ -177,22 +174,24 @@ button.bad-pressed{
 
     btnStart.onclick = () => {
       setPressed(btnStart);
-      socket.emit("infilStartRound", roomId);
+      socket.emit("infiltradoStartRound", roomId);
     };
 
     btnNextQ.onclick = () => {
       setPressed(btnNextQ);
-      socket.emit("infilNextQuestion", roomId);
+      socket.emit("infiltradoNextQuestion", roomId);
     };
 
+    // botão 1: revela apenas o infiltrado (sem conceito)
     btnRevealInfil.onclick = () => {
       setPressed(btnRevealInfil, "bad");
-      socket.emit("infilRevealInfiltrator", roomId);
+      socket.emit("infiltradoReveal", roomId);
     };
 
+    // botão 2: revela tema/conceito/pista depois
     btnRevealConcepts.onclick = () => {
       setPressed(btnRevealConcepts, "good");
-      socket.emit("infilRevealConcepts", roomId);
+      socket.emit("infiltradoRevealConcepts", roomId);
     };
 
     btnLeave.onclick = () => {
@@ -210,12 +209,7 @@ button.bad-pressed{
       document.getElementById("masterControls").hidden = false;
       document.getElementById("kickHint").hidden = false;
 
-      // re-render pra ativar clique de expulsar
-      // (se já tiver lista cache)
-      if (playersCache.length) {
-        const masterToken = playersCache.find(p => p.isMaster)?.token;
-        renderPlayers(playersCache, masterToken);
-      }
+      if (playersCache.length) renderPlayers(playersCache);
     });
 
     socket.on("roomClosed", () => {
@@ -228,39 +222,75 @@ button.bad-pressed{
       window.location.href = "/";
     });
 
-    socket.on("playersUpdate", ({ players, masterToken, gameType }) => {
-      // garante que estamos no jogo certo
+    socket.on("playersUpdate", ({ players, gameType }) => {
       if (gameType && gameType !== "infiltrado") return;
-
       document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
-      renderPlayers(players, masterToken);
+      renderPlayers(players);
     });
 
-    // Eventos do Infiltrado (dependem do seu server ter isso)
-    socket.on("infilYourInfo", ({ text }) => {
-      document.getElementById("yourInfo").textContent = text || "—";
+    // ✅ segredo individual (sua info)
+    socket.on("infiltradoSecret", (payload) => {
+      // payload:
+      //  - { role:"infiltrado", themeName, hint }
+      //  - { role:"jogador", themeName, concept }
+      const el = document.getElementById("yourInfo");
+      if (!payload) { el.textContent = "—"; return; }
+
+      if (payload.role === "infiltrado") {
+        el.textContent = `Você é o INFILTRADO — Tema: ${payload.themeName} — Pista: ${payload.hint}`;
+      } else {
+        el.textContent = `Tema: ${payload.themeName} — Conceito: ${payload.concept}`;
+      }
     });
 
-    socket.on("infilQuestion", ({ question, orderText }) => {
+    // ✅ rodada/pergunta atual
+    socket.on("infiltradoRound", ({ round, question, order }) => {
       document.getElementById("questionBox").textContent = question || "—";
-      document.getElementById("orderBox").textContent = orderText || "—";
+      const orderText = (order && order.length) ? `Ordem (rodada ${round}): ${order.join(" → ")}` : "—";
+      document.getElementById("orderBox").textContent = orderText;
+
+      // quando muda de rodada, esconde a caixa de revelação (evita ficar “velha”)
+      document.getElementById("revealBox").hidden = true;
+      document.getElementById("revealLine1").textContent = "—";
+      document.getElementById("revealLine2").textContent = "—";
     });
 
-    // ✅ revela SÓ quem é o infiltrado
-    socket.on("infilInfiltratorRevealed", ({ infiltratorName }) => {
-      document.getElementById("revealBox").hidden = false;
-      document.getElementById("revealLine1").textContent = `INFILTRADO: ${infiltratorName}`;
-      document.getElementById("revealLine2").textContent = "Conceitos ainda não revelados.";
+    socket.on("infiltradoVotingOpened", () => {
+      document.getElementById("questionBox").textContent = "Votação aberta!";
+      document.getElementById("orderBox").textContent = "Conversem e votem no infiltrado.";
     });
 
-    // ✅ revela os conceitos só quando o mestre quiser
-    socket.on("infilConceptsRevealed", ({ theme, playersConcept, infiltratorConcept }) => {
+    socket.on("infiltradoNeedResolve", (reason) => {
+      alert(reason || "Não foi possível revelar (empate/sem votos).");
+    });
+
+    socket.on("infiltradoRoundCancelled", (msg) => {
+      alert(msg || "Rodada cancelada.");
+      document.getElementById("questionBox").textContent = "—";
+      document.getElementById("orderBox").textContent = "—";
+    });
+
+    // ✅ Revelação 1: só o infiltrado (sem conceito)
+    socket.on("infiltradoInfiltratorRevealed", ({ infiltradoName, topVotedName }) => {
       document.getElementById("revealBox").hidden = false;
-      document.getElementById("revealLine1").textContent = `Tema: ${theme || "—"}`;
+      document.getElementById("revealLine1").textContent = `INFILTRADO: ${infiltradoName || "—"}`;
       document.getElementById("revealLine2").textContent =
-        `Jogadores: ${playersConcept || "—"} | Infiltrado: ${infiltratorConcept || "—"}`;
+        `Mais votado: ${topVotedName || "—"} — (as respostas ainda não foram reveladas)`;
+    });
+
+    // ✅ Revelação 2: agora sim tema/conceito/pista
+    socket.on("infiltradoConceptsRevealed", ({ themeName, concept, infiltradoHint }) => {
+      document.getElementById("revealBox").hidden = false;
+      document.getElementById("revealLine1").textContent = `Tema: ${themeName || "—"}`;
+      document.getElementById("revealLine2").textContent = `Conceito: ${concept || "—"} | Pista do infiltrado: ${infiltradoHint || "—"}`;
+    });
+
+    // (opcional) estado geral — útil pra depurar e/ou ajustar UI depois
+    socket.on("infiltradoState", (state) => {
+      // Se quiser, aqui dá pra habilitar/desabilitar botões baseado em phase,
+      // mas deixei só pra manter compatível e não mexer no seu fluxo.
+      // console.log("infiltradoState", state);
     });
   </script>
 </body>
 </html>
-
