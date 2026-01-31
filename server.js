@@ -13,10 +13,7 @@ app.use(express.static("public"));
 
 const MAX_PLAYERS_PER_ROOM = 8;
 
-// Sala vazia: segurar por um tempo (troca de página / reload)
 const EMPTY_ROOM_GRACE_MS = 60_000;
-
-// Jogador desconectado (suspensão): tolerância para voltar sem perder lugar
 const RECONNECT_GRACE_MS = 90_000;
 
 const rooms = {};
@@ -30,15 +27,8 @@ const rooms = {};
 //   numbers: { token: number },
 //   emptyTimer,
 //
-//   qse: {
-//     phase,
-//     active: Set(token),
-//     submittedByWriter: { token: bool },
-//     submissionTextByWriter: { token: string },
-//     characterByTarget: { token: string },
-//     revealedToTarget: { token: bool },
-//     writingTargetByWriter: { token: token }, // só informativo durante writing
-//   }
+//   qse: {...}  // quem-sou-eu
+//   spy: {...}  // espião (impostor.html)
 // }
 
 function generateRoomId() {
@@ -49,7 +39,6 @@ function generateRoomId() {
 }
 
 function generateSessionKey() {
-  // simples e suficiente pro nosso caso (não é login bancário)
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
@@ -103,7 +92,6 @@ function closeRoom(roomId) {
 
   io.to(roomId).emit("roomClosed");
 
-  // desconecta todos sockets da sala (se existirem)
   for (const token of Object.keys(room.players)) {
     const sid = room.players[token].socketId;
     if (sid) {
@@ -120,32 +108,135 @@ function closeRoom(roomId) {
   delete rooms[roomId];
 }
 
-/** Derangement (ninguém aponta pra si).
- * Se não achar em tentativas, usa ciclo.
- */
-function derangement(ids) {
-  const n = ids.length;
-  if (n < 2) return null;
+function schedulePlayerRemoval(roomId, token) {
+  const room = rooms[roomId];
+  if (!room) return;
+  const p = room.players[token];
+  if (!p) return;
+  if (p.disconnectTimer) return;
 
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const perm = [...ids].sort(() => Math.random() - 0.5);
-    let ok = true;
-    for (let i = 0; i < n; i++) {
-      if (perm[i] === ids[i]) { ok = false; break; }
+  p.disconnectTimer = setTimeout(() => {
+    const r = rooms[roomId];
+    if (!r) return;
+
+    const pp = r.players[token];
+    if (!pp) return;
+
+    if (pp.online) {
+      pp.disconnectTimer = null;
+      return;
     }
-    if (ok) {
-      const map = {};
-      for (let i = 0; i < n; i++) map[ids[i]] = perm[i];
-      return map;
+
+    delete r.players[token];
+    delete r.sessions[token];
+    delete r.numbers[token];
+
+    // remove de jogos
+    if (r.qse) {
+      r.qse.active.delete(token);
+      delete r.qse.submittedByWriter[token];
+      delete r.qse.submissionTextByWriter[token];
+      delete r.qse.characterByTarget[token];
+      delete r.qse.revealedToTarget[token];
+      delete r.qse.writingTargetByWriter[token];
+    }
+    if (r.spy) {
+      r.spy.active.delete(token);
+      delete r.spy.answersByToken[token];
+      // votos: remove voto do desconectado e votos contra ele continuam (votos são por voter)
+      delete r.spy.votesByVoter[token];
+    }
+
+    if (r.masterToken === token) {
+      const remaining = Object.keys(r.players);
+      if (remaining.length) {
+        const onlineFirst = remaining.find(t => r.players[t].online) || remaining[0];
+        r.masterToken = onlineFirst;
+        const sid = r.players[onlineFirst].socketId;
+        if (sid) io.to(sid).emit("master");
+      } else {
+        r.masterToken = null;
+      }
+    }
+
+    if (Object.keys(r.players).length === 0) {
+      scheduleEmptyRoomDeletion(roomId);
+    }
+
+    emitPlayersUpdate(roomId);
+    if (r.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
+    if (r.gameType === "impostor") emitSpyState(roomId);
+  }, RECONNECT_GRACE_MS);
+}
+
+function cancelPlayerRemoval(roomId, token) {
+  const room = rooms[roomId];
+  if (!room) return;
+  const p = room.players[token];
+  if (!p) return;
+
+  if (p.disconnectTimer) {
+    clearTimeout(p.disconnectTimer);
+    p.disconnectTimer = null;
+  }
+}
+
+function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  room.banned.add(token);
+
+  const p = room.players[token];
+  if (p) {
+    const sid = p.socketId;
+    if (sid) {
+      io.to(sid).emit("kicked", { reason });
+      const s = io.sockets.sockets.get(sid);
+      if (s) s.disconnect(true);
     }
   }
 
-  const map = {};
-  for (let i = 0; i < n; i++) map[ids[i]] = ids[(i + 1) % n];
-  return map;
+  delete room.players[token];
+  delete room.sessions[token];
+  delete room.numbers[token];
+
+  if (room.qse) {
+    room.qse.active.delete(token);
+    delete room.qse.submittedByWriter[token];
+    delete room.qse.submissionTextByWriter[token];
+    delete room.qse.characterByTarget[token];
+    delete room.qse.revealedToTarget[token];
+    delete room.qse.writingTargetByWriter[token];
+  }
+  if (room.spy) {
+    room.spy.active.delete(token);
+    delete room.spy.answersByToken[token];
+    delete room.spy.votesByVoter[token];
+  }
+
+  if (room.masterToken === token) {
+    const remaining = Object.keys(room.players);
+    if (remaining.length) {
+      const onlineFirst = remaining.find(t => room.players[t].online) || remaining[0];
+      room.masterToken = onlineFirst;
+      const sid = room.players[onlineFirst].socketId;
+      if (sid) io.to(sid).emit("master");
+    } else {
+      room.masterToken = null;
+    }
+  }
+
+  emitPlayersUpdate(roomId);
+  if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
+  if (room.gameType === "impostor") emitSpyState(roomId);
+
+  if (Object.keys(room.players).length === 0) {
+    scheduleEmptyRoomDeletion(roomId);
+  }
 }
 
-/* ---------- QSE helpers ---------- */
+/* ------------------ QUEM SOU EU (mantido) ------------------ */
 
 function ensureQse(room) {
   if (!room.qse) {
@@ -172,14 +263,14 @@ function qseResetRound(room) {
   room.qse.writingTargetByWriter = {};
 }
 
-function qseEmitPhase(roomId) {
+function emitQsePhase(roomId) {
   const room = rooms[roomId];
   if (!room) return;
   ensureQse(room);
   io.to(roomId).emit("qsePhase", { phase: room.qse.phase });
 }
 
-function qseEmitWritingStatus(roomId) {
+function emitQseWritingStatus(roomId) {
   const room = rooms[roomId];
   if (!room) return;
   ensureQse(room);
@@ -195,7 +286,29 @@ function qseEmitWritingStatus(roomId) {
   io.to(roomId).emit("qseWritingStatus", status);
 }
 
-function qseEmitOthersCharacters(roomId) {
+function derangement(ids) {
+  const n = ids.length;
+  if (n < 2) return null;
+
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const perm = [...ids].sort(() => Math.random() - 0.5);
+    let ok = true;
+    for (let i = 0; i < n; i++) {
+      if (perm[i] === ids[i]) { ok = false; break; }
+    }
+    if (ok) {
+      const map = {};
+      for (let i = 0; i < n; i++) map[ids[i]] = perm[i];
+      return map;
+    }
+  }
+
+  const map = {};
+  for (let i = 0; i < n; i++) map[ids[i]] = ids[(i + 1) % n];
+  return map;
+}
+
+function emitQseOthersCharacters(roomId) {
   const room = rooms[roomId];
   if (!room) return;
   ensureQse(room);
@@ -203,10 +316,9 @@ function qseEmitOthersCharacters(roomId) {
   const activeTokens = Array.from(room.qse.active);
   const byTarget = room.qse.characterByTarget;
 
-  // cada jogador ativo recebe a lista dos outros (nome + personagem), menos o próprio
   activeTokens.forEach((viewerToken) => {
     const viewerSid = room.players[viewerToken]?.socketId;
-    if (!viewerSid) return; // offline
+    if (!viewerSid) return;
 
     const list = activeTokens
       .filter((targetToken) => targetToken !== viewerToken)
@@ -219,7 +331,6 @@ function qseEmitOthersCharacters(roomId) {
     io.to(viewerSid).emit("qseOthersCharacters", list);
   });
 
-  // quem ficou fora recebe aviso (se online)
   Object.keys(room.players).forEach((token) => {
     if (!room.qse.active.has(token)) {
       const sid = room.players[token].socketId;
@@ -228,137 +339,173 @@ function qseEmitOthersCharacters(roomId) {
   });
 }
 
-/* ---------- Disconnect grace ---------- */
+/* ------------------ ESPIÃO (impostor.html) ------------------ */
 
-function schedulePlayerRemoval(roomId, token) {
-  const room = rooms[roomId];
-  if (!room) return;
-  const p = room.players[token];
-  if (!p) return;
+// 50 pares (principal + paralela)
+const SPY_QUESTION_PAIRS = [
+  { principal: "Marcas de carros de luxo mais bonitos", paralela: "Carros caros que mais chamam atenção" },
+  { principal: "Carros esportivos famosos", paralela: "Carros rápidos que você conhece" },
 
-  if (p.disconnectTimer) return;
+  { principal: "Comidas chiques de restaurante caro", paralela: "Comidas caras que você já viu no cardápio" },
+  { principal: "Comidas boas para ocasiões especiais", paralela: "Comidas que você pediria para comemorar algo" },
+  { principal: "Sobremesas sofisticadas", paralela: "Sobremesas mais cara que você já comeu" },
 
-  p.disconnectTimer = setTimeout(() => {
-    const r = rooms[roomId];
-    if (!r) return;
-    const pp = r.players[token];
-    if (!pp) return;
+  { principal: "Destinos de viagem famosos", paralela: "Lugares turísticos que você gostaria de conhecer" },
+  { principal: "Lugares que parecem caros", paralela: "Lugar mais luxuosos que você já viu em fotos ou filmes" },
+  { principal: "Cidades famosas pelo turismo", paralela: "Cidades que você viajaria sem pensar duas vezes" },
 
-    // se voltou online, não remove
-    if (pp.online) {
-      pp.disconnectTimer = null;
-      return;
-    }
+  { principal: "Coisas que passam status", paralela: "Coisas que as pessoas acham chique" },
+  { principal: "Itens caros que as pessoas compram", paralela: "Itens caros que você gostaria de ter" },
 
-    // remove definitivo
-    delete r.players[token];
-    delete r.sessions[token];
-    delete r.numbers[token];
+  { principal: "Filmes que todo mundo conhece", paralela: "Filmes famosos que você já assistiu" },
+  { principal: "Séries que muita gente já viu", paralela: "Séries populares que você gosta" },
+  { principal: "Jogos famosos", paralela: "Jogos que muita gente já jogou" },
+  { principal: "Jogos bons para jogar em grupo", paralela: "Jogos divertidos para jogar com amigos" },
 
-    if (r.qse) {
-      r.qse.active.delete(token);
-      delete r.qse.submittedByWriter[token];
-      delete r.qse.submissionTextByWriter[token];
-      delete r.qse.characterByTarget[token];
-      delete r.qse.revealedToTarget[token];
-      delete r.qse.writingTargetByWriter[token];
-    }
+  { principal: "Personagens famosos do cinema", paralela: "Personagens do cinema que todo mundo reconhece" },
+  { principal: "Personagens icônicos da cultura pop", paralela: "Personagens que você gosta" },
 
-    // se era mestre: transfere para alguém que restou (preferência online)
-    if (r.masterToken === token) {
-      const remaining = Object.keys(r.players);
-      if (remaining.length) {
-        const onlineFirst = remaining.find(t => r.players[t].online) || remaining[0];
-        r.masterToken = onlineFirst;
-        const sid = r.players[onlineFirst].socketId;
-        if (sid) io.to(sid).emit("master");
-      } else {
-        r.masterToken = null;
-      }
-    }
+  { principal: "Artistas para ouvir treinando", paralela: "Artistas que te dão energia" },
+  { principal: "Músicas para por em uma viagem de carro", paralela: "Músicas para cantar cantar no chuveiro" },
+  { principal: "Artistas famosos atualmente", paralela: "Artistas que você escuta bastante" },
+  { principal: "Músicas que animam uma festa", paralela: "Músicas que fazem você se animar" },
+  { principal: "Bandas/artistas conhecidos mundialmente", paralela: "Bandas/artistas que todo mundo ouve" },
 
-    // se sala vazia, agenda delete
-    if (Object.keys(r.players).length === 0) {
-      scheduleEmptyRoomDeletion(roomId);
-    }
+  { principal: "Aplicativos que todo mundo usa", paralela: "Aplicativos que você usa todo dia" },
+  { principal: "Redes sociais populares", paralela: "Redes sociais que você mais usa" },
+  { principal: "Tecnologias modernas", paralela: "Tecnologias que você acha interessantes" },
 
-    emitPlayersUpdate(roomId);
-    if (r.gameType === "quem-sou-eu") {
-      qseEmitWritingStatus(roomId);
-    }
-  }, RECONNECT_GRACE_MS);
-}
+  { principal: "Coisas essenciais para o dia a dia", paralela: "Coisas que você usa todo dia" },
+  { principal: "Coisas que facilitam a rotina", paralela: "Coisas que tornam a vida mais fácil" },
+  { principal: "Hábitos comuns", paralela: "Hábitos que você tem" },
 
-function cancelPlayerRemoval(roomId, token) {
-  const room = rooms[roomId];
-  if (!room) return;
-  const p = room.players[token];
-  if (!p) return;
+  { principal: "Animais fofos", paralela: "Animais que as pessoas gostam" },
+  { principal: "Animais perigosos", paralela: "Animais que dão medo" },
+  { principal: "Animais famosos", paralela: "Animais que todo mundo conhece" },
 
-  if (p.disconnectTimer) {
-    clearTimeout(p.disconnectTimer);
-    p.disconnectTimer = null;
+  { principal: "Qualidades de uma boa amizade", paralela: "Qualidades que você valoriza em amigos" },
+  { principal: "Coisas que deixam alguém nervoso", paralela: "Coisas que te deixam nervoso" },
+  { principal: "Coisas que dão vergonha", paralela: "Situações constrangedoras" },
+
+  { principal: "Coisas legais para fazer no fim de semana", paralela: "Coisas que você gosta de fazer no tempo livre" },
+  { principal: "Programas para relaxar", paralela: "Coisas que te ajudam a relaxar" },
+
+  { principal: "Coisas que distraem no trabalho ou estudo", paralela: "Coisas que te fazem perder o foco" },
+  { principal: "Motivos comuns para procrastinar", paralela: "Coisas que fazem você procrastinar" },
+
+  { principal: "Itens que todo mundo compra no mercado", paralela: "Itens que você sempre compra" },
+  { principal: "Coisas que você compraria se tivesse dinheiro", paralela: "Coisas que você gostaria de comprar" },
+
+  { principal: "Coisas que todo mundo reclama", paralela: "Coisas que você reclama" },
+  { principal: "Coisas que dão preguiça", paralela: "Coisas que você evita fazer" },
+
+  // +11 pra fechar 50
+  { principal: "Coisas que deixam alguém com fome", paralela: "Coisas que te dão vontade de comer" },
+  { principal: "Lanches famosos", paralela: "Lanches que você sempre pediria" },
+  { principal: "Doces que todo mundo gosta", paralela: "Doces que você gosta" },
+
+  { principal: "Esportes populares", paralela: "Esportes que você já praticou ou assistiu" },
+  { principal: "Coisas legais pra fazer em casa", paralela: "Coisas que você faz quando tá entediado" },
+  { principal: "Hobbies comuns", paralela: "Hobbies que você teria" },
+
+  { principal: "Coisas que deixam alguém bravo", paralela: "Coisas que te irritam" },
+  { principal: "Coisas que todo mundo já esqueceu em casa", paralela: "Coisas que você esquece com frequência" },
+  { principal: "Coisas que você leva numa viagem", paralela: "Coisas que você não pode esquecer numa viagem" },
+
+  { principal: "Coisas boas de ter no quarto", paralela: "Coisas que você gostaria no seu quarto" },
+  { principal: "Coisas que combinam com verão", paralela: "Coisas que você faz no calor" },
+];
+
+function ensureSpy(room) {
+  if (!room.spy) {
+    room.spy = {
+      phase: "lobby", // lobby | answering | voting | revealed
+      active: new Set(),
+      principal: null,
+      paralela: null,
+      spyToken: null,
+      answersByToken: {},     // token -> string
+      votesByVoter: {},       // voterToken -> targetToken
+      revealed: false,
+      lastAnswersPublic: null // array {name, token, answer}
+    };
   }
 }
 
-/* ---------- Kick ---------- */
-
-function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
-  const room = rooms[roomId];
-  if (!room) return;
-
-  // ban até a sala fechar
-  room.banned.add(token);
-
-  const p = room.players[token];
-  if (p) {
-    const sid = p.socketId;
-    if (sid) {
-      io.to(sid).emit("kicked", { reason });
-      const s = io.sockets.sockets.get(sid);
-      if (s) s.disconnect(true);
-    }
-  }
-
-  // remove imediatamente
-  delete room.players[token];
-  delete room.sessions[token];
-  delete room.numbers[token];
-
-  if (room.qse) {
-    room.qse.active.delete(token);
-    delete room.qse.submittedByWriter[token];
-    delete room.qse.submissionTextByWriter[token];
-    delete room.qse.characterByTarget[token];
-    delete room.qse.revealedToTarget[token];
-    delete room.qse.writingTargetByWriter[token];
-  }
-
-  // se expulsou o mestre (não deveria acontecer), ajusta
-  if (room.masterToken === token) {
-    const remaining = Object.keys(room.players);
-    if (remaining.length) {
-      const onlineFirst = remaining.find(t => room.players[t].online) || remaining[0];
-      room.masterToken = onlineFirst;
-      const sid = room.players[onlineFirst].socketId;
-      if (sid) io.to(sid).emit("master");
-    } else {
-      room.masterToken = null;
-    }
-  }
-
-  emitPlayersUpdate(roomId);
-  if (room.gameType === "quem-sou-eu") qseEmitWritingStatus(roomId);
-
-  if (Object.keys(room.players).length === 0) {
-    scheduleEmptyRoomDeletion(roomId);
-  }
+function spyReset(room) {
+  ensureSpy(room);
+  room.spy.phase = "lobby";
+  room.spy.active = new Set();
+  room.spy.principal = null;
+  room.spy.paralela = null;
+  room.spy.spyToken = null;
+  room.spy.answersByToken = {};
+  room.spy.votesByVoter = {};
+  room.spy.revealed = false;
+  room.spy.lastAnswersPublic = null;
 }
 
-/* ---------- Socket ---------- */
+function emitSpyState(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+  ensureSpy(room);
+
+  const activeTokens = Array.from(room.spy.active);
+  const players = Object.keys(room.players).map(token => ({
+    token,
+    name: room.players[token].name,
+    online: !!room.players[token].online,
+    isActive: room.spy.active.has(token),
+    hasAnswered: !!room.spy.answersByToken[token],
+  }));
+
+  io.to(roomId).emit("spyState", {
+    phase: room.spy.phase,
+    principal: room.spy.principal,
+    // paralela e spyToken NÃO vão aqui
+    players,
+    votesByVoter: room.spy.votesByVoter,
+    answersPublic: room.spy.lastAnswersPublic,
+  });
+}
+
+function countVotes(room) {
+  const tally = {}; // targetToken -> count
+  for (const voter in room.spy.votesByVoter) {
+    const target = room.spy.votesByVoter[voter];
+    if (!target) continue;
+    if (!room.spy.active.has(voter)) continue; // só votos de ativos
+    if (!room.spy.active.has(target)) continue; // só em ativos
+    tally[target] = (tally[target] || 0) + 1;
+  }
+  return tally;
+}
+
+function topVoteResult(room) {
+  const tally = countVotes(room);
+  const entries = Object.keys(tally).map(t => ({ token: t, count: tally[t] }));
+  if (entries.length === 0) return { ok: false, reason: "Ninguém votou ainda." };
+
+  entries.sort((a, b) => b.count - a.count);
+
+  const top = entries[0];
+  const second = entries[1];
+
+  // empate no topo?
+  if (second && second.count === top.count) {
+    return { ok: false, reason: "Empate nos votos! Alguém precisa mudar o voto até ficar um mais votado." };
+  }
+
+  return { ok: true, topToken: top.token, topCount: top.count, tally };
+}
+
+function getCallerToken(room, socketId) {
+  return Object.keys(room.players).find(t => room.players[t].socketId === socketId) || null;
+}
 
 io.on("connection", (socket) => {
-  // Criar sala
+  /* ------------------ criar / entrar sala ------------------ */
+
   socket.on("createRoom", ({ roomId, password, masterName, gameType, playerToken }) => {
     if (!masterName || !password) {
       socket.emit("errorMessage", "Informe seu nome e uma senha.");
@@ -398,6 +545,7 @@ io.on("connection", (socket) => {
       numbers: {},
       emptyTimer: null,
       qse: null,
+      spy: null,
     };
 
     rooms[roomId].players[playerToken] = {
@@ -419,12 +567,15 @@ io.on("connection", (socket) => {
 
     if (gt === "quem-sou-eu") {
       ensureQse(rooms[roomId]);
-      qseEmitPhase(roomId);
-      qseEmitWritingStatus(roomId);
+      emitQsePhase(roomId);
+      emitQseWritingStatus(roomId);
+    }
+    if (gt === "impostor") {
+      ensureSpy(rooms[roomId]);
+      emitSpyState(roomId);
     }
   });
 
-  // Entrar/Reconectar na sala
   socket.on("joinRoom", ({ roomId, password, playerName, playerToken, sessionKey }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
@@ -444,27 +595,20 @@ io.on("connection", (socket) => {
 
     cancelEmptyRoomDeletion(roomId);
 
-    // Reconnect por sessionKey (sem senha)
     const hasSession = room.sessions[playerToken] && sessionKey && room.sessions[playerToken] === sessionKey;
 
     if (!hasSession) {
-      // primeira entrada: exige senha
       if (room.password !== password) {
         socket.emit("errorMessage", "Senha incorreta");
         return;
       }
-
-      // sala cheia: conta tokens (mesmo offline) — você pode mudar para só online se quiser
       if (!room.players[playerToken] && Object.keys(room.players).length >= MAX_PLAYERS_PER_ROOM) {
         socket.emit("errorMessage", "Sala cheia");
         return;
       }
-
-      // gera sessionKey e guarda
       room.sessions[playerToken] = generateSessionKey();
     }
 
-    // se já existia jogador, só atualiza; senão cria
     if (!room.players[playerToken]) {
       room.players[playerToken] = {
         name: (playerName || "Jogador").trim(),
@@ -481,13 +625,10 @@ io.on("connection", (socket) => {
 
     socket.join(roomId);
 
-    // se não tiver mestre, define
     if (!room.masterToken) {
       room.masterToken = playerToken;
       socket.emit("master");
     }
-
-    // se o jogador que entrou é o mestre
     if (room.masterToken === playerToken) {
       socket.emit("master");
     }
@@ -498,12 +639,10 @@ io.on("connection", (socket) => {
 
     if (room.gameType === "quem-sou-eu") {
       ensureQse(room);
-      qseEmitPhase(roomId);
-      qseEmitWritingStatus(roomId);
+      emitQsePhase(roomId);
+      emitQseWritingStatus(roomId);
 
-      // se a rodada já está em playing e ele é ativo, reenvia lista dos outros
       if (room.qse.phase === "playing" && room.qse.active.has(playerToken)) {
-        // manda novamente lista dos outros pra ele (apenas ele)
         const activeTokens = Array.from(room.qse.active);
         const list = activeTokens
           .filter(t => t !== playerToken)
@@ -514,39 +653,47 @@ io.on("connection", (socket) => {
           }));
         io.to(socket.id).emit("qseOthersCharacters", list);
 
-        // se já foi revelado, manda também
         if (room.qse.revealedToTarget[playerToken]) {
           io.to(socket.id).emit("qseYourCharacter", { character: room.qse.characterByTarget[playerToken] });
         }
       }
     }
+
+    if (room.gameType === "impostor") {
+      ensureSpy(room);
+      emitSpyState(roomId);
+
+      // Se está em answering, manda a pergunta do jogador (sem revelar spy)
+      if (room.spy.phase === "answering" && room.spy.active.has(playerToken)) {
+        const question = (playerToken === room.spy.spyToken) ? room.spy.paralela : room.spy.principal;
+        io.to(socket.id).emit("spyQuestion", { question });
+      }
+    }
   });
 
-  // Mestre expulsa jogador
+  /* ------------------ expulsa ------------------ */
   socket.on("kickPlayer", ({ roomId, targetToken }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    // identificar quem é este socket (token)
-    const kickerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    const kickerToken = getCallerToken(room, socket.id);
     if (!kickerToken) return;
-
     if (room.masterToken !== kickerToken) return;
+
     if (!targetToken) return;
     if (targetToken === room.masterToken) return;
 
     kickPlayer(roomId, targetToken);
   });
 
-  /* -------- ITO (De 1 a 100) -------- */
-
+  /* ------------------ ITO ------------------ */
   socket.on("distribute", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    const callerToken = getCallerToken(room, socket.id);
     if (!callerToken) return;
     if (callerToken !== room.masterToken) return;
 
@@ -566,7 +713,7 @@ io.on("connection", (socket) => {
     const room = rooms[roomId];
     if (!room) return;
 
-    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    const callerToken = getCallerToken(room, socket.id);
     if (!callerToken) return;
     if (callerToken !== room.masterToken) return;
 
@@ -580,17 +727,14 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("allNumbers", result);
   });
 
-  /* -------- EU SOU... (Quem sou eu?) -------- */
-
+  /* ------------------ QUEM SOU EU ------------------ */
   socket.on("qseStartRound", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
-    if (!room) return;
-    if (room.gameType !== "quem-sou-eu") return;
+    if (!room || room.gameType !== "quem-sou-eu") return;
 
-    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
-    if (!callerToken) return;
-    if (callerToken !== room.masterToken) return;
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
 
     ensureQse(room);
     qseResetRound(room);
@@ -618,17 +762,16 @@ io.on("connection", (socket) => {
       if (sid) io.to(sid).emit("qseYourTarget", { targetToken, targetName });
     });
 
-    qseEmitPhase(roomId);
-    qseEmitWritingStatus(roomId);
+    emitQsePhase(roomId);
+    emitQseWritingStatus(roomId);
   });
 
   socket.on("qseSubmit", ({ roomId, text }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
-    if (!room) return;
-    if (room.gameType !== "quem-sou-eu") return;
+    if (!room || room.gameType !== "quem-sou-eu") return;
 
-    const token = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    const token = getCallerToken(room, socket.id);
     if (!token) return;
 
     ensureQse(room);
@@ -655,41 +798,36 @@ io.on("connection", (socket) => {
     room.qse.submissionTextByWriter[token] = clean;
 
     socket.emit("qseSubmittedOK");
-    qseEmitWritingStatus(roomId);
+    emitQseWritingStatus(roomId);
   });
 
   socket.on("qseCloseWriting", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
-    if (!room) return;
-    if (room.gameType !== "quem-sou-eu") return;
+    if (!room || room.gameType !== "quem-sou-eu") return;
 
-    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
-    if (!callerToken) return;
-    if (callerToken !== room.masterToken) return;
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
 
     ensureQse(room);
     if (room.qse.phase !== "writing") return;
 
     const allActive = Array.from(room.qse.active);
-
-    // mantém apenas quem enviou
     const survivors = allActive.filter(t => !!room.qse.submittedByWriter[t]);
 
     if (survivors.length < 2) {
       room.qse.active = new Set(survivors);
       room.qse.phase = "lobby";
-      qseEmitPhase(roomId);
-      qseEmitWritingStatus(roomId);
+      emitQsePhase(roomId);
+      emitQseWritingStatus(roomId);
       io.to(roomId).emit("qseRoundCancelled", "Poucas pessoas enviaram. Rodada cancelada.");
       return;
     }
 
-    // recalcula embaralhamento apenas entre quem enviou
     const map = derangement(survivors);
     if (!map) {
       room.qse.phase = "lobby";
-      qseEmitPhase(roomId);
+      emitQsePhase(roomId);
       io.to(roomId).emit("qseRoundCancelled", "Não foi possível recalcular. Inicie novamente.");
       return;
     }
@@ -705,20 +843,18 @@ io.on("connection", (socket) => {
 
     room.qse.phase = "playing";
 
-    qseEmitPhase(roomId);
-    qseEmitWritingStatus(roomId);
-    qseEmitOthersCharacters(roomId);
+    emitQsePhase(roomId);
+    emitQseWritingStatus(roomId);
+    emitQseOthersCharacters(roomId);
   });
 
   socket.on("qseRevealTo", ({ roomId, targetToken }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
-    if (!room) return;
-    if (room.gameType !== "quem-sou-eu") return;
+    if (!room || room.gameType !== "quem-sou-eu") return;
 
-    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
-    if (!callerToken) return;
-    if (callerToken !== room.masterToken) return;
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
 
     ensureQse(room);
     if (room.qse.phase !== "playing") return;
@@ -742,23 +878,214 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("qseRevealedUpdate", { revealedToTarget: room.qse.revealedToTarget });
   });
 
-  /* -------- Sair / disconnect -------- */
+  /* ------------------ ESPIÃO ------------------ */
+
+  socket.on("spyStartRound", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "impostor") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureSpy(room);
+    spyReset(room);
+
+    const tokens = Object.keys(room.players).filter(t => room.players[t].online);
+    if (tokens.length < 2) {
+      socket.emit("errorMessage", "Precisa de pelo menos 2 jogadores online para iniciar.");
+      return;
+    }
+
+    const pair = SPY_QUESTION_PAIRS[Math.floor(Math.random() * SPY_QUESTION_PAIRS.length)];
+    const spyToken = tokens[Math.floor(Math.random() * tokens.length)];
+
+    room.spy.phase = "answering";
+    room.spy.active = new Set(tokens);
+    room.spy.principal = pair.principal;
+    room.spy.paralela = pair.paralela;
+    room.spy.spyToken = spyToken;
+
+    // envia pergunta individual (ninguém sabe que é spy)
+    tokens.forEach((t) => {
+      const sid = room.players[t]?.socketId;
+      if (!sid) return;
+      const question = (t === spyToken) ? pair.paralela : pair.principal;
+      io.to(sid).emit("spyQuestion", { question });
+    });
+
+    emitSpyState(roomId);
+  });
+
+  socket.on("spySubmitAnswer", ({ roomId, text }) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "impostor") return;
+
+    const token = getCallerToken(room, socket.id);
+    if (!token) return;
+
+    ensureSpy(room);
+    if (room.spy.phase !== "answering") {
+      socket.emit("errorMessage", "Não estamos na fase de resposta.");
+      return;
+    }
+    if (!room.spy.active.has(token)) {
+      socket.emit("errorMessage", "Você não está ativo nessa rodada.");
+      return;
+    }
+
+    const clean = (text || "").toString().trim();
+    if (!clean) {
+      socket.emit("errorMessage", "Digite uma resposta antes de enviar.");
+      return;
+    }
+    if (clean.length > 80) {
+      socket.emit("errorMessage", "Resposta muito grande. Use até 80 caracteres.");
+      return;
+    }
+
+    room.spy.answersByToken[token] = clean;
+    socket.emit("spyAnsweredOK");
+
+    emitSpyState(roomId);
+  });
+
+  socket.on("spyRevealAnswers", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "impostor") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureSpy(room);
+    if (room.spy.phase !== "answering") return;
+
+    // quem não respondeu sai da rodada
+    const allActive = Array.from(room.spy.active);
+    const survivors = allActive.filter(t => !!room.spy.answersByToken[t]);
+
+    room.spy.active = new Set(survivors);
+
+    if (survivors.length < 2) {
+      // volta pro lobby
+      room.spy.phase = "lobby";
+      room.spy.lastAnswersPublic = null;
+      io.to(roomId).emit("spyRoundCancelled", "Poucas pessoas responderam. Rodada cancelada.");
+      emitSpyState(roomId);
+      return;
+    }
+
+    // se o spy não respondeu, ele simplesmente não está na rodada (e segue o caos divertido)
+    // garante que spyToken ainda está em active; se não, continua mesmo assim e spy só vai ser alguém que estava (o antigo spy não participa)
+    if (!room.spy.active.has(room.spy.spyToken)) {
+      // mantém spyToken mesmo assim (o jogo vai revelar ele, mas ele não participou).
+      // isso combina com sua regra: "vai ser engraçado".
+      // Se você preferir trocar spy automaticamente, me fala que eu troco.
+    }
+
+    // preparar respostas públicas (com nomes)
+    room.spy.lastAnswersPublic = survivors.map(t => ({
+      token: t,
+      name: room.players[t]?.name || "Jogador",
+      answer: room.spy.answersByToken[t]
+    }));
+
+    room.spy.phase = "voting"; // já abre votação
+    room.spy.votesByVoter = {}; // limpa votos
+
+    io.to(roomId).emit("spyAnswersRevealed", {
+      principal: room.spy.principal,
+      answers: room.spy.lastAnswersPublic
+    });
+
+    emitSpyState(roomId);
+  });
+
+  socket.on("spyVote", ({ roomId, targetToken }) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "impostor") return;
+
+    const voterToken = getCallerToken(room, socket.id);
+    if (!voterToken) return;
+
+    ensureSpy(room);
+    if (room.spy.phase !== "voting") {
+      socket.emit("errorMessage", "A votação não está aberta.");
+      return;
+    }
+
+    // só ativos podem votar
+    if (!room.spy.active.has(voterToken)) {
+      socket.emit("errorMessage", "Você não está ativo nesta rodada.");
+      return;
+    }
+
+    // pode votar em si, pode trocar
+    if (!room.spy.active.has(targetToken)) {
+      socket.emit("errorMessage", "Você só pode votar em alguém da rodada.");
+      return;
+    }
+
+    room.spy.votesByVoter[voterToken] = targetToken;
+    emitSpyState(roomId);
+  });
+
+  socket.on("spyRevealSpy", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "impostor") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureSpy(room);
+    if (room.spy.phase !== "voting") return;
+
+    const res = topVoteResult(room);
+    if (!res.ok) {
+      io.to(roomId).emit("spyNeedResolve", res.reason);
+      return;
+    }
+
+    // revela tudo
+    room.spy.phase = "revealed";
+    room.spy.revealed = true;
+
+    const spyToken = room.spy.spyToken;
+    const spyName = room.players[spyToken]?.name || "(desconectado)";
+    const spyQuestion = room.spy.paralela;
+
+    io.to(roomId).emit("spyRevealed", {
+      spyToken,
+      spyName,
+      principal: room.spy.principal,
+      paralela: room.spy.paralela,
+      topVotedToken: res.topToken,
+      topVotedName: room.players[res.topToken]?.name || "Jogador",
+      tally: res.tally
+    });
+
+    emitSpyState(roomId);
+  });
+
+  /* ------------------ sair / disconnect ------------------ */
 
   socket.on("leaveRoom", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    const token = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    const token = getCallerToken(room, socket.id);
     if (!token) return;
 
-    // mestre saiu explicitamente -> fecha sala
     if (token === room.masterToken) {
       closeRoom(roomId);
       return;
     }
 
-    // remove jogador imediatamente
     cancelPlayerRemoval(roomId, token);
 
     delete room.players[token];
@@ -773,11 +1100,17 @@ io.on("connection", (socket) => {
       delete room.qse.revealedToTarget[token];
       delete room.qse.writingTargetByWriter[token];
     }
+    if (room.spy) {
+      room.spy.active.delete(token);
+      delete room.spy.answersByToken[token];
+      delete room.spy.votesByVoter[token];
+    }
 
     socket.leave(roomId);
 
     emitPlayersUpdate(roomId);
-    if (room.gameType === "quem-sou-eu") qseEmitWritingStatus(roomId);
+    if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
+    if (room.gameType === "impostor") emitSpyState(roomId);
 
     if (Object.keys(room.players).length === 0) {
       scheduleEmptyRoomDeletion(roomId);
@@ -785,20 +1118,19 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    // acha em quais salas esse socket estava
     for (const roomId in rooms) {
       const room = rooms[roomId];
-      const token = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+      const token = getCallerToken(room, socket.id);
       if (!token) continue;
 
       room.players[token].online = false;
       room.players[token].socketId = null;
 
-      // NÃO remove imediatamente: dá tempo para reconectar sem perder lugar
       schedulePlayerRemoval(roomId, token);
 
       emitPlayersUpdate(roomId);
-      if (room.gameType === "quem-sou-eu") qseEmitWritingStatus(roomId);
+      if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
+      if (room.gameType === "impostor") emitSpyState(roomId);
 
       if (Object.keys(room.players).length === 0) {
         scheduleEmptyRoomDeletion(roomId);
