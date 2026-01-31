@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Espião</title>
+  <style>
+    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
+    .wrap{max-width:920px;margin:0 auto}
+    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0}
+    input,button,textarea{
+      width:100%;box-sizing:border-box;padding:14px;border-radius:10px;
+      border:1px solid #333;background:#1f1f1f;color:#fff;font-size:16px
+    }
+    textarea{min-height:90px;resize:vertical}
+    button{cursor:pointer}
+    button:hover{background:#2a2a2a}
+    .btnRow{display:flex;gap:10px;flex-wrap:wrap}
+    .btnRow>*{flex:1;min-width:170px}
+    ul{list-style:none;padding:0;margin:0}
+    li{padding:8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .muted{color:#aaa;font-size:13px;line-height:1.4}
+    .hidden{display:none !important}
+    .twoCol{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width: 820px){ .twoCol{grid-template-columns:1fr} }
+    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;font-weight:800}
+    .right{display:flex;gap:8px;align-items:center}
+    .onlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#25D366}
+    .offlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#666}
+    .kickBtn{padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer}
+    .kickBtn:hover{background:#2a2a2a}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #333;background:#151515;color:#ddd;font-size:12px}
+    .bigQ{font-size:18px;font-weight:800;color:#25D366}
+    .voteBtn{padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer}
+    .voteBtn:hover{background:#2a2a2a}
+    .voted{border-color:#25D366}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 style="margin:10px 0 0 0;">Espião 🕶️</h1>
+    <div class="muted">Responda a pergunta. Depois: discussão + votação.</div>
+
+    <div class="card">
+      <div>Sala: <span class="code" id="roomIdText">------</span></div>
+      <div>Você: <b id="nameText"></b></div>
+      <div class="muted" id="roleText" style="margin-top:6px;"></div>
+      <div class="muted" id="connText" style="margin-top:6px;"></div>
+      <div class="muted" style="margin-top:6px;"><span class="pill" id="phasePill">Fase: lobby</span></div>
+    </div>
+
+    <div class="card hidden" id="passwordCard">
+      <input id="passwordInput" placeholder="Senha da sala" />
+      <button id="btnEnter">Entrar</button>
+      <div class="muted" style="margin-top:8px;">Se você abriu o link direto, digite a senha aqui.</div>
+    </div>
+
+    <div class="card hidden" id="mainCard">
+      <div class="twoCol">
+        <div>
+          <h3 style="margin-top:0;">Jogadores</h3>
+          <ul id="players"></ul>
+        </div>
+
+        <div>
+          <h3 style="margin-top:0;">Ações</h3>
+          <div id="masterControls" class="hidden">
+            <div class="btnRow">
+              <button id="btnStart">Iniciar rodada</button>
+              <button id="btnReveal">Revelar respostas + votação</button>
+            </div>
+            <div class="muted" style="margin-top:10px;">
+              “Revelar respostas” também exclui quem não respondeu e abre a votação.
+            </div>
+          </div>
+
+          <button id="btnLeave" style="margin-top:10px;">Sair</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- FASE: answering -->
+    <div class="card hidden" id="answerCard">
+      <h3 style="margin-top:0;">Responda</h3>
+      <div class="muted">Pergunta:</div>
+      <div class="bigQ" id="yourQuestion">---</div>
+
+      <textarea id="answerText" placeholder="Sua resposta (até 80 caracteres)"></textarea>
+      <button id="btnSend" style="margin-top:10px;">Enviar resposta</button>
+      <div class="muted" id="answerInfo" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- FASE: voting/discussion -->
+    <div class="card hidden" id="voteCard">
+      <h3 style="margin-top:0;">Discussão + Votação</h3>
+      <div class="muted">Pergunta principal:</div>
+      <div class="bigQ" id="principalQuestion">---</div>
+
+      <div class="card" style="margin-top:12px;">
+        <h4 style="margin:0 0 8px 0;">Respostas</h4>
+        <ul id="answersList"></ul>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <h4 style="margin:0 0 8px 0;">Votação</h4>
+        <div class="muted" style="margin-bottom:8px;">
+          Vote em quem você acha que é o espião. Pode votar em si. Pode trocar o voto.
+        </div>
+        <ul id="voteList"></ul>
+        <div class="muted" id="voteInfo" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="card hidden" id="masterRevealCard" style="margin-top:12px;">
+        <button id="btnRevealSpy">Revelar espião</button>
+        <div class="muted" style="margin-top:8px;">
+          Só revela se não houver empate no topo.
+        </div>
+      </div>
+    </div>
+
+    <!-- FASE: revealed -->
+    <div class="card hidden" id="revealedCard">
+      <h3 style="margin-top:0;">Resultado</h3>
+      <div id="resultText"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    function getPlayerToken(){
+      let t = localStorage.getItem("tbr_player_token");
+      if (!t) {
+        t = (crypto?.randomUUID?.() || (Date.now()+"-"+Math.random())).toString();
+        localStorage.setItem("tbr_player_token", t);
+      }
+      return t;
+    }
+    const playerToken = getPlayerToken();
+
+    const qs = new URLSearchParams(location.search);
+    const roomId = (qs.get("room") || "").trim().toUpperCase();
+    const name = (qs.get("name") || "").trim();
+
+    document.getElementById("roomIdText").textContent = roomId || "??????";
+    document.getElementById("nameText").textContent = name || "Sem nome";
+
+    let isMaster = false;
+    let joined = false;
+
+    const passwordCard = document.getElementById("passwordCard");
+    const mainCard = document.getElementById("mainCard");
+    const answerCard = document.getElementById("answerCard");
+    const voteCard = document.getElementById("voteCard");
+    const revealedCard = document.getElementById("revealedCard");
+    const masterControls = document.getElementById("masterControls");
+    const masterRevealCard = document.getElementById("masterRevealCard");
+
+    const roleText = document.getElementById("roleText");
+    const connText = document.getElementById("connText");
+    const phasePill = document.getElementById("phasePill");
+
+    function storeSessionKey(key){
+      if (!roomId) return;
+      sessionStorage.setItem(`tbr_session_${roomId}`, key);
+    }
+    function getSessionKey(){
+      return sessionStorage.getItem(`tbr_session_${roomId}`);
+    }
+    function clearSessionKey(){
+      sessionStorage.removeItem(`tbr_session_${roomId}`);
+    }
+
+    function joinRoomWithPassword(password){
+      socket.emit("joinRoom", { roomId, password, playerName: name, playerToken });
+    }
+    function joinRoomWithSession(sessionKey){
+      socket.emit("joinRoom", { roomId, sessionKey, playerName: name, playerToken });
+    }
+
+    document.getElementById("btnEnter").onclick = () => {
+      const password = document.getElementById("passwordInput").value.trim();
+      if (!password) return alert("Digite a senha.");
+      joinRoomWithPassword(password);
+    };
+
+    function attemptJoin(){
+      const sk = getSessionKey();
+      if (sk) {
+        joinRoomWithSession(sk);
+        return;
+      }
+
+      const masterPass = sessionStorage.getItem("tbr_master_password");
+      const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
+      if (masterPass && masterRoom === roomId) {
+        joinRoomWithPassword(masterPass);
+        return;
+      }
+
+      const joinPass = sessionStorage.getItem("tbr_join_password");
+      const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
+      if (joinPass && joinRoom === roomId) {
+        joinRoomWithPassword(joinPass);
+        return;
+      }
+
+      passwordCard.classList.remove("hidden");
+    }
+
+    function showMain(){
+      mainCard.classList.remove("hidden");
+      passwordCard.classList.add("hidden");
+    }
+
+    function setPhase(phase){
+      phasePill.textContent = "Fase: " + phase;
+
+      answerCard.classList.add("hidden");
+      voteCard.classList.add("hidden");
+      revealedCard.classList.add("hidden");
+
+      if (phase === "answering") answerCard.classList.remove("hidden");
+      if (phase === "voting") voteCard.classList.remove("hidden");
+      if (phase === "revealed") revealedCard.classList.remove("hidden");
+    }
+
+    socket.on("connect", () => {
+      connText.textContent = "Conectado ✅";
+      if (!joined) attemptJoin();
+    });
+
+    socket.on("disconnect", () => {
+      connText.textContent = "Desconectado… tentando reconectar";
+      joined = false;
+    });
+
+    // mestre
+    document.getElementById("btnStart").onclick = () => {
+      socket.emit("spyStartRound", roomId);
+      document.getElementById("answerInfo").textContent = "";
+      document.getElementById("answerText").value = "";
+      document.getElementById("voteInfo").textContent = "";
+    };
+
+    document.getElementById("btnReveal").onclick = () => {
+      socket.emit("spyRevealAnswers", roomId);
+    };
+
+    document.getElementById("btnRevealSpy").onclick = () => {
+      socket.emit("spyRevealSpy", roomId);
+    };
+
+    // jogador
+    document.getElementById("btnSend").onclick = () => {
+      const text = document.getElementById("answerText").value.trim();
+      socket.emit("spySubmitAnswer", { roomId, text });
+    };
+
+    document.getElementById("btnLeave").onclick = () => {
+      socket.emit("leaveRoom", roomId);
+
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
+      clearSessionKey();
+
+      window.location.href = "/";
+    };
+
+    socket.on("errorMessage", (msg) => {
+      alert(msg);
+      passwordCard.classList.remove("hidden");
+    });
+
+    socket.on("joinedRoom", ({ sessionKey }) => {
+      joined = true;
+      showMain();
+
+      if (sessionKey) storeSessionKey(sessionKey);
+
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
+
+      roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
+    });
+
+    socket.on("master", () => {
+      isMaster = true;
+      masterControls.classList.remove("hidden");
+      masterRevealCard.classList.remove("hidden");
+      roleText.textContent = "Você é o mestre 👑";
+    });
+
+    socket.on("playersUpdate", (payload) => {
+      const ul = document.getElementById("players");
+      ul.innerHTML = "";
+
+      if (payload && payload.players) {
+        payload.players.forEach(p => {
+          const li = document.createElement("li");
+
+          const left = document.createElement("span");
+          left.textContent = p.name + (p.isMaster ? " 👑" : "");
+
+          const right = document.createElement("span");
+          right.className = "right";
+
+          const dot = document.createElement("span");
+          dot.className = p.online ? "onlineDot" : "offlineDot";
+          dot.title = p.online ? "online" : "offline";
+          right.appendChild(dot);
+
+          if (isMaster && !p.isMaster) {
+            const btn = document.createElement("button");
+            btn.className = "kickBtn";
+            btn.textContent = "Expulsar";
+            btn.onclick = () => {
+              if (confirm(`Expulsar ${p.name}?`)) {
+                socket.emit("kickPlayer", { roomId, targetToken: p.token });
+              }
+            };
+            right.appendChild(btn);
+          }
+
+          li.appendChild(left);
+          li.appendChild(right);
+          ul.appendChild(li);
+        });
+      }
+    });
+
+    // pergunta individual (cada um recebe a sua)
+    socket.on("spyQuestion", ({ question }) => {
+      document.getElementById("yourQuestion").textContent = question;
+      document.getElementById("answerInfo").textContent = "";
+      setPhase("answering");
+    });
+
+    socket.on("spyAnsweredOK", () => {
+      document.getElementById("answerInfo").textContent = "Enviado ✅ Aguarde o mestre revelar as respostas.";
+    });
+
+    socket.on("spyRoundCancelled", (msg) => {
+      alert(msg);
+      setPhase("lobby");
+    });
+
+    socket.on("spyAnswersRevealed", ({ principal, answers }) => {
+      document.getElementById("principalQuestion").textContent = principal;
+
+      const ul = document.getElementById("answersList");
+      ul.innerHTML = "";
+      answers.forEach(a => {
+        const li = document.createElement("li");
+        li.innerHTML = `<span><b>${a.name}</b></span><span>${a.answer}</span>`;
+        ul.appendChild(li);
+      });
+
+      setPhase("voting");
+      document.getElementById("voteInfo").textContent = "";
+    });
+
+    socket.on("spyNeedResolve", (msg) => {
+      document.getElementById("voteInfo").textContent = msg;
+      alert(msg);
+    });
+
+    socket.on("spyRevealed", ({ spyName, principal, paralela, topVotedName, tally }) => {
+      setPhase("revealed");
+
+      const result = document.getElementById("resultText");
+      result.innerHTML = `
+        <p><b>Mais votado:</b> ${topVotedName}</p>
+        <p><b>Espião:</b> ${spyName}</p>
+        <p class="muted"><b>Pergunta principal:</b> ${principal}</p>
+        <p class="muted"><b>Pergunta do espião:</b> ${paralela}</p>
+        <hr style="border:0;border-top:1px solid #222;margin:12px 0;">
+        <p><b>Votos (contagem):</b></p>
+      `;
+
+      const tokens = Object.keys(tally || {});
+      if (!tokens.length) {
+        result.innerHTML += `<p class="muted">Sem votos.</p>`;
+      } else {
+        tokens.sort((a,b)=> (tally[b]-tally[a]));
+        tokens.forEach(t => {
+          result.innerHTML += `<p class="muted">${t} → ${tally[t]}</p>`;
+        });
+        result.innerHTML += `<p class="muted">(Os códigos acima são tokens internos; se quiser, eu deixo bonitinho com nomes.)</p>`;
+      }
+    });
+
+    // estado geral (pra montar votação e fase)
+    socket.on("spyState", (state) => {
+      if (!state) return;
+
+      setPhase(state.phase);
+
+      // monta a lista de votação usando players ativos
+      if (state.phase === "voting" && state.players) {
+        const active = state.players.filter(p => p.isActive);
+
+        const voteUl = document.getElementById("voteList");
+        voteUl.innerHTML = "";
+
+        // descobrir meu token para marcar meu voto
+        // (a gente não conhece o token diretamente; vamos inferir pelo nome + "você")
+        // melhor: marcar só por retorno de votos (sem destacar meu voto), mas dá pra fazer simples:
+        // vamos só destacar quem está "mais votado" depois — por enquanto, marcar o voto do "meu voter" não dá com segurança sem token local.
+        active.forEach(p => {
+          const li = document.createElement("li");
+
+          const left = document.createElement("span");
+          left.textContent = p.name;
+
+          const btn = document.createElement("button");
+          btn.className = "voteBtn";
+          btn.textContent = "Votar";
+          btn.onclick = () => socket.emit("spyVote", { roomId, targetToken: p.token });
+
+          li.appendChild(left);
+          li.appendChild(btn);
+          voteUl.appendChild(li);
+        });
+      }
+    });
+
+    socket.on("roomClosed", () => {
+      alert("O mestre saiu. A sala foi fechada.");
+      clearSessionKey();
+      window.location.href = "/";
+    });
+
+    socket.on("kicked", ({ reason }) => {
+      alert(reason || "Você foi expulso.");
+      clearSessionKey();
+      window.location.href = "/";
+    });
+
+    attemptJoin();
+  </script>
+</body>
+</html>
