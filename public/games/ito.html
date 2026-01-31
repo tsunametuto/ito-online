@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>ITO</title>
+  <title>De 1 a 100</title>
   <style>
     body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
     .wrap{max-width:720px;margin:0 auto}
@@ -14,35 +14,44 @@
     }
     button{cursor:pointer}
     button:hover{background:#2a2a2a}
-    .btnRow{display:flex;gap:10px}
-    .btnRow>*{flex:1}
+    .btnRow{display:flex;gap:10px;flex-wrap:wrap}
+    .btnRow>*{flex:1;min-width:160px}
     .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;font-weight:800}
     #number{font-size:48px;color:#25D366;margin:12px 0}
     ul{list-style:none;padding:0;margin:0}
-    li{padding:8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between}
+    li{padding:8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;gap:10px;align-items:center}
     .muted{color:#aaa;font-size:13px;line-height:1.4}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #333;background:#151515;color:#ddd;font-size:12px}
+    .hidden{display:none !important}
+    .right{display:flex;gap:8px;align-items:center}
+    .onlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#25D366}
+    .offlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#666}
+    .kickBtn{
+      padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer;
+    }
+    .kickBtn:hover{background:#2a2a2a}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1 style="margin:10px 0 0 0;">ITO 🎲</h1>
-    <div class="muted">Ordene o tema sem repetir números</div>
+    <h1 style="margin:10px 0 0 0;">De 1 a 100 🎲</h1>
+    <div class="muted">Números únicos por rodada</div>
 
     <div class="card">
       <div>Sala: <span class="code" id="roomIdText">------</span></div>
       <div>Você: <b id="nameText"></b></div>
       <div class="muted" id="roleText" style="margin-top:6px;"></div>
+      <div class="muted" id="connText" style="margin-top:6px;"></div>
     </div>
 
-    <!-- senha (só aparece se precisar) -->
-    <div class="card" id="passwordCard" style="display:none;">
+    <div class="card hidden" id="passwordCard">
       <input id="passwordInput" placeholder="Senha da sala" />
       <button id="btnEnter">Entrar</button>
       <div class="muted" style="margin-top:8px;">Se você abriu o link direto, digite a senha aqui.</div>
     </div>
 
-    <div class="card" id="gameCard" style="display:none;">
-      <div id="masterControls" style="display:none;">
+    <div class="card hidden" id="gameCard">
+      <div id="masterControls" class="hidden">
         <div class="btnRow">
           <button id="btnDistribute">Distribuir</button>
           <button id="btnReveal">Revelar</button>
@@ -63,6 +72,16 @@
   <script>
     const socket = io();
 
+    function getPlayerToken(){
+      let t = localStorage.getItem("tbr_player_token");
+      if (!t) {
+        t = (crypto?.randomUUID?.() || (Date.now()+"-"+Math.random())).toString();
+        localStorage.setItem("tbr_player_token", t);
+      }
+      return t;
+    }
+    const playerToken = getPlayerToken();
+
     const qs = new URLSearchParams(location.search);
     const roomId = (qs.get("room") || "").trim().toUpperCase();
     const name = (qs.get("name") || "").trim();
@@ -71,47 +90,84 @@
     document.getElementById("nameText").textContent = name || "Sem nome";
 
     let isMaster = false;
+    let joined = false;
 
-    function showGame() {
-      document.getElementById("gameCard").style.display = "block";
-      document.getElementById("passwordCard").style.display = "none";
+    const passwordCard = document.getElementById("passwordCard");
+    const gameCard = document.getElementById("gameCard");
+    const masterControls = document.getElementById("masterControls");
+    const roleText = document.getElementById("roleText");
+    const connText = document.getElementById("connText");
+
+    function joinRoomWithPassword(password){
+      socket.emit("joinRoom", { roomId, password, playerName: name, playerToken });
+    }
+    function joinRoomWithSession(sessionKey){
+      socket.emit("joinRoom", { roomId, sessionKey, playerName: name, playerToken });
     }
 
-    function joinRoomWith(password) {
-      socket.emit("joinRoom", { roomId, password, playerName: name });
-    }
-
-    // fallback (se abriu link direto)
     document.getElementById("btnEnter").onclick = () => {
       const password = document.getElementById("passwordInput").value.trim();
       if (!roomId) return alert("Código da sala ausente.");
       if (!name) return alert("Nome ausente.");
       if (!password) return alert("Digite a senha.");
-      joinRoomWith(password);
+      joinRoomWithPassword(password);
     };
 
-    // ✅ Auto-join: tenta mestre, depois tenta jogador
-    (function autoJoin() {
+    function storeSessionKey(key){
+      if (!roomId) return;
+      sessionStorage.setItem(`tbr_session_${roomId}`, key);
+    }
+    function getSessionKey(){
+      return sessionStorage.getItem(`tbr_session_${roomId}`);
+    }
+    function clearSessionKey(){
+      sessionStorage.removeItem(`tbr_session_${roomId}`);
+    }
+
+    function attemptJoin(){
+      // 1) tenta por sessionKey (reconexão / suspensão)
+      const sk = getSessionKey();
+      if (sk) {
+        joinRoomWithSession(sk);
+        return;
+      }
+
+      // 2) primeira entrada via lobby (senha temporária)
       const masterPass = sessionStorage.getItem("tbr_master_password");
       const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
-
       if (masterPass && masterRoom === roomId) {
-        joinRoomWith(masterPass);
+        joinRoomWithPassword(masterPass);
         return;
       }
 
       const joinPass = sessionStorage.getItem("tbr_join_password");
       const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
-
       if (joinPass && joinRoom === roomId) {
-        joinRoomWith(joinPass);
+        joinRoomWithPassword(joinPass);
         return;
       }
 
-      // não tem senha salva -> mostra input
-      document.getElementById("passwordCard").style.display = "block";
-    })();
+      // 3) link direto
+      passwordCard.classList.remove("hidden");
+    }
 
+    function showGame(){
+      passwordCard.classList.add("hidden");
+      gameCard.classList.remove("hidden");
+    }
+
+    // reconexão automática (socket.io reconecta; a gente reentra com sessionKey)
+    socket.on("connect", () => {
+      connText.textContent = "Conectado ✅";
+      if (!joined) attemptJoin();
+    });
+
+    socket.on("disconnect", () => {
+      connText.textContent = "Desconectado… tentando reconectar";
+      joined = false;
+    });
+
+    // ações
     document.getElementById("btnDistribute").onclick = () => {
       socket.emit("distribute", roomId);
       document.getElementById("allNumbers").innerHTML = "";
@@ -123,34 +179,43 @@
 
     document.getElementById("btnLeave").onclick = () => {
       socket.emit("leaveRoom", roomId);
+
+      // limpa tudo da sessão
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
       sessionStorage.removeItem("tbr_join_password");
       sessionStorage.removeItem("tbr_join_room");
+      clearSessionKey();
+
       window.location.href = "/";
     };
 
+    // eventos servidor
     socket.on("errorMessage", (msg) => {
       alert(msg);
-      // se autoJoin falhar, mostra senha
-      document.getElementById("passwordCard").style.display = "block";
+      passwordCard.classList.remove("hidden");
     });
 
-    socket.on("joinedRoom", () => {
+    socket.on("joinedRoom", ({ sessionKey }) => {
+      joined = true;
       showGame();
-      document.getElementById("roleText").textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
 
-      // ✅ apaga senha do navegador assim que entrou
+      // guarda sessionKey (sem senha)
+      if (sessionKey) storeSessionKey(sessionKey);
+
+      // apaga senha temporária (não fica salva)
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
       sessionStorage.removeItem("tbr_join_password");
       sessionStorage.removeItem("tbr_join_room");
+
+      roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
     });
 
     socket.on("master", () => {
       isMaster = true;
-      document.getElementById("masterControls").style.display = "block";
-      document.getElementById("roleText").textContent = "Você é o mestre 👑";
+      masterControls.classList.remove("hidden");
+      roleText.textContent = "Você é o mestre 👑";
     });
 
     socket.on("playersUpdate", (payload) => {
@@ -160,7 +225,33 @@
       if (payload && payload.players) {
         payload.players.forEach(p => {
           const li = document.createElement("li");
-          li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
+
+          const left = document.createElement("span");
+          left.textContent = p.name + (p.isMaster ? " 👑" : "");
+
+          const right = document.createElement("span");
+          right.className = "right";
+
+          const dot = document.createElement("span");
+          dot.className = p.online ? "onlineDot" : "offlineDot";
+          dot.title = p.online ? "online" : "offline";
+          right.appendChild(dot);
+
+          if (isMaster && !p.isMaster) {
+            const btn = document.createElement("button");
+            btn.className = "kickBtn";
+            btn.textContent = "Expulsar";
+            btn.onclick = () => {
+              if (confirm(`Expulsar ${p.name}?`)) {
+                socket.emit("kickPlayer", { roomId, targetToken: p.token });
+              }
+            };
+            right.appendChild(btn);
+          }
+
+          li.appendChild(left);
+          li.appendChild(right);
+
           ul.appendChild(li);
         });
       }
@@ -180,12 +271,18 @@
 
     socket.on("roomClosed", () => {
       alert("O mestre saiu. A sala foi fechada.");
-      sessionStorage.removeItem("tbr_master_password");
-      sessionStorage.removeItem("tbr_master_room");
-      sessionStorage.removeItem("tbr_join_password");
-      sessionStorage.removeItem("tbr_join_room");
+      clearSessionKey();
       window.location.href = "/";
     });
+
+    socket.on("kicked", ({ reason }) => {
+      alert(reason || "Você foi expulso.");
+      clearSessionKey();
+      window.location.href = "/";
+    });
+
+    // primeira tentativa (caso connect já esteja ok)
+    attemptJoin();
   </script>
 </body>
 </html>
