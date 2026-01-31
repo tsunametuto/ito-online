@@ -346,8 +346,8 @@ const SPY_QUESTION_PAIRS = [
   { principal: "Marcas de carros de luxo mais bonitos", paralela: "Carros caros que mais chamam atenção" },
   { principal: "Carros esportivos famosos", paralela: "Carros rápidos que você conhece" },
 
-  { principal: "Comidas chiques de restaurante caro", paralela: "Comidas caras que você já viu no cardápio" },
-  { principal: "Comidas boas para ocasiões especiais", paralela: "Comidas que você pediria para comemorar algo" },
+  { principal: "Comidas chiques de restaurante caro", paralela: "Comidas caras que você já comeu" },
+  { principal: "Comidas para ocasiões especiais", paralela: "Comidas para comemorar algo" },
   { principal: "Sobremesas sofisticadas", paralela: "Sobremesas mais cara que você já comeu" },
 
   { principal: "Destinos de viagem famosos", paralela: "Lugares turísticos que você gostaria de conhecer" },
@@ -362,8 +362,8 @@ const SPY_QUESTION_PAIRS = [
   { principal: "Jogos famosos", paralela: "Jogos que muita gente já jogou" },
   { principal: "Jogos bons para jogar em grupo", paralela: "Jogos divertidos para jogar com amigos" },
 
-  { principal: "Personagens famosos do cinema", paralela: "Personagens do cinema que todo mundo reconhece" },
-  { principal: "Personagens icônicos da cultura pop", paralela: "Personagens que você gosta" },
+  { principal: "Personagens famosos do cinema", paralela: "Personagens famoso que você gosta" },
+  { principal: "Personagens icônicos da cultura pop", paralela: "Personagens icônicos que você odeia" },
 
   { principal: "Artistas para ouvir treinando", paralela: "Artistas que te dão energia" },
   { principal: "Músicas para por em uma viagem de carro", paralela: "Músicas para cantar cantar no chuveiro" },
@@ -1141,3 +1141,4 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+
