@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Infiltrado</title>
+  <style>
+    :root{
+      --bg:#0b0b0b;
+      --card:#131313;
+      --text:#f2f2f2;
+      --muted:#bdbdbd;
+      --border:#222;
+      --btn:#2b2b2b;
+      --btn2:#3a3a3a;
+      --green:#0f7a3a;
+      --red:#7a1a1a;
+      --hl:#7c4dff;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: Arial, sans-serif;
+      background:var(--bg);
+      color:var(--text);
+      padding:16px;
+    }
+    .wrap{max-width:900px;margin:0 auto;}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:14px;
+      margin-top:12px;
+    }
+    h1{margin:0;font-size:22px}
+    .muted{color:var(--muted);font-size:14px}
+    button{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px 12px;
+      background:var(--btn);
+      color:var(--text);
+      font-weight:700;
+      cursor:pointer;
+    }
+    button:hover{background:var(--btn2)}
+    button.primary{background:var(--hl);border-color:transparent}
+    button.primary:hover{filter:brightness(1.05)}
+    button.danger{background:var(--red);border-color:transparent}
+    button.good{background:var(--green);border-color:transparent}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .grow{flex:1}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:#101010;font-size:13px}
+    .players{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px}
+    .pitem{border:1px solid var(--border);border-radius:12px;padding:10px;background:#101010;display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .voteBtn{padding:8px 10px;border-radius:10px}
+    .voted{outline:2px solid var(--hl)}
+    .hidden{display:none !important}
+    .big{font-size:18px;font-weight:900}
+    .order{margin-top:8px;line-height:1.35}
+    .notice{margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:12px;background:#0f0f0f}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Infiltrado</h1>
+        <div class="muted" id="roomLine">Sala: —</div>
+      </div>
+      <div class="row">
+        <button id="btnStart" class="primary hidden">Iniciar rodada</button>
+        <button id="btnNext" class="primary hidden">Próxima pergunta</button>
+        <button id="btnReveal" class="primary hidden">Revelar infiltrado</button>
+        <button id="btnLeave" class="danger">Sair</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="align-items:center;justify-content:space-between">
+        <div>
+          <div class="muted">Tema</div>
+          <div class="big" id="themeName">—</div>
+        </div>
+        <div class="pill" id="rolePill">—</div>
+      </div>
+
+      <div class="notice" id="secretBox">
+        <div class="muted" id="secretLabel">—</div>
+        <div class="big" id="secretValue">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="muted">Pergunta atual</div>
+      <div class="big" id="question">Aguardando o mestre…</div>
+      <div class="muted" style="margin-top:10px">Ordem para responder (aleatória)</div>
+      <div class="order" id="order">—</div>
+      <div class="muted" style="margin-top:10px">Você pode votar e trocar o voto.</div>
+    </div>
+
+    <div class="card">
+      <div class="muted">Jogadores</div>
+      <div class="players" id="players"></div>
+      <div class="muted" id="tieMsg" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card hidden" id="resultCard">
+      <div class="big">Resultado</div>
+      <div id="resultText" class="muted" style="margin-top:10px;white-space:pre-wrap"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const qs = new URLSearchParams(location.search);
+    const roomId = (qs.get("room") || "").toUpperCase();
+    const name = qs.get("name") || "Jogador";
+    const token = qs.get("token") || "";
+    const sessionKey = qs.get("sessionKey") || "";
+
+    const roomLine = document.getElementById("roomLine");
+    roomLine.textContent = "Sala: " + (roomId || "—");
+
+    // UI refs
+    const btnStart = document.getElementById("btnStart");
+    const btnNext = document.getElementById("btnNext");
+    const btnReveal = document.getElementById("btnReveal");
+    const btnLeave = document.getElementById("btnLeave");
+
+    const themeNameEl = document.getElementById("themeName");
+    const rolePill = document.getElementById("rolePill");
+    const secretLabel = document.getElementById("secretLabel");
+    const secretValue = document.getElementById("secretValue");
+
+    const questionEl = document.getElementById("question");
+    const orderEl = document.getElementById("order");
+    const playersEl = document.getElementById("players");
+    const tieMsg = document.getElementById("tieMsg");
+
+    const resultCard = document.getElementById("resultCard");
+    const resultText = document.getElementById("resultText");
+
+    let isMaster = false;
+    let myToken = token;
+    let mySessionKey = sessionKey;
+    let myVote = null;
+
+    // se você já tem um padrão de token no index, ele sempre passa
+    // aqui só garantimos que, se não veio, a pessoa ainda pode ser avisada.
+    if (!roomId || !myToken) {
+      alert("Faltou room/token na URL. Volte pelo index.");
+    }
+
+    // Entrar automaticamente (sem salvar senha no navegador)
+    socket.emit("joinRoom", {
+      roomId,
+      password: "__SESSION__", // senha ignorada se sessionKey bater (se não bater, vai falhar)
+      playerName: name,
+      playerToken: myToken,
+      sessionKey: mySessionKey
+    });
+
+    socket.on("errorMessage", (m) => alert(m));
+
+    socket.on("master", () => {
+      isMaster = true;
+      btnStart.classList.remove("hidden");
+      btnNext.classList.remove("hidden");
+      btnReveal.classList.remove("hidden");
+    });
+
+    btnStart.onclick = () => socket.emit("infiltradoStartRound", roomId);
+    btnNext.onclick = () => socket.emit("infiltradoNextQuestion", roomId);
+    btnReveal.onclick = () => socket.emit("infiltradoReveal", roomId);
+
+    btnLeave.onclick = () => {
+      socket.emit("leaveRoom", roomId);
+      window.location.href = "/";
+    };
+
+    socket.on("roomClosed", () => {
+      alert("A sala foi fechada.");
+      window.location.href = "/";
+    });
+
+    socket.on("kicked", () => {
+      alert("Você foi expulso da sala.");
+      window.location.href = "/";
+    });
+
+    socket.on("joinedRoom", ({ sessionKey }) => {
+      if (sessionKey) mySessionKey = sessionKey;
+    });
+
+    socket.on("playersUpdate", (data) => {
+      if (!data || data.roomId !== roomId) return;
+
+      themeNameEl.textContent = data.gameType === "infiltrado" ? (themeNameEl.textContent || "—") : "—";
+
+      playersEl.innerHTML = "";
+      data.players.forEach(p => {
+        const div = document.createElement("div");
+        div.className = "pitem";
+        div.innerHTML = `
+          <div>
+            <div><b>${p.name}</b> ${p.isMaster ? "👑" : ""}</div>
+            <div class="muted">${p.online ? "online" : "offline"}</div>
+          </div>
+          <button class="voteBtn ${myVote===p.token ? "voted":""}">Votar</button>
+        `;
+        const btn = div.querySelector("button");
+        btn.onclick = () => {
+          myVote = p.token;
+          socket.emit("infiltradoVote", { roomId, targetToken: p.token });
+        };
+        playersEl.appendChild(div);
+      });
+    });
+
+    socket.on("infiltradoSecret", ({ role, themeName, concept, hint }) => {
+      themeNameEl.textContent = themeName || "—";
+
+      if (role === "infiltrado") {
+        rolePill.textContent = "VOCÊ É O INFILTRADO";
+        secretLabel.textContent = "Sua pista (tente se misturar):";
+        secretValue.textContent = hint || "—";
+      } else {
+        rolePill.textContent = "VOCÊ É JOGADOR";
+        secretLabel.textContent = "Seu conceito:";
+        secretValue.textContent = concept || "—";
+      }
+    });
+
+    socket.on("infiltradoRound", ({ round, question, order }) => {
+      resultCard.classList.add("hidden");
+      resultText.textContent = "";
+      tieMsg.textContent = "";
+
+      questionEl.textContent = `(${round}/3) ${question || "—"}`;
+      orderEl.textContent = (order && order.length) ? order.join(" → ") : "—";
+    });
+
+    socket.on("infiltradoVotingOpened", () => {
+      tieMsg.textContent = "Votação aberta. Conversem e votem. Pode trocar o voto.";
+    });
+
+    socket.on("infiltradoNeedResolve", (msg) => {
+      tieMsg.textContent = msg || "Empate. Conversem e mudem o voto.";
+    });
+
+    socket.on("infiltradoState", (state) => {
+      if (!state) return;
+
+      // pinta o voto confirmado
+      if (state.votesByVoter && myVote) {
+        // só UI local já resolve (botões atualizam no playersUpdate)
+      }
+    });
+
+    socket.on("infiltradoRevealed", (data) => {
+      tieMsg.textContent = "";
+
+      // resultado bonitinho
+      const tally = data.tally || {};
+      const votersByTarget = {};
+      // não temos voters por target aqui (só tally). Se quiser isso também,
+      // eu adiciono no server (é fácil). Por enquanto mostramos só contagem.
+
+      resultText.textContent =
+        `Mais votado: ${data.topVotedName} (${tally[data.topVotedToken] || 0} votos)\n` +
+        `Infiltrado: ${data.infiltradoName} (${tally[data.infiltradoToken] || 0} votos)\n\n` +
+        `Tema: ${data.themeName}\n` +
+        `Conceito dos jogadores: ${data.concept}\n` +
+        `Pista do infiltrado: ${data.infiltradoHint}`;
+
+      resultCard.classList.remove("hidden");
+    });
+  </script>
+</body>
+</html>
