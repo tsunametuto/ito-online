@@ -5,42 +5,51 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>ITO</title>
   <style>
-    body{margin:0;font-family:Arial;background:#050505;color:#fff;text-align:center;padding:20px}
+    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
     .wrap{max-width:720px;margin:0 auto}
-    .card{background:#0b0b0b;border:1px solid #1f1f1f;border-radius:12px;padding:16px;margin:14px 0}
-    .btn{width:100%;padding:14px;border-radius:10px;border:1px solid #1f1f1f;background:#5b0a63;color:#fff;font-weight:800;font-size:18px;text-transform:uppercase;cursor:pointer}
-    .btn:hover{background:#6d0d77}
-    .btn.secondary{background:transparent;color:#ccc;text-transform:none;font-weight:600}
-    input{width:100%;padding:14px;border-radius:10px;border:1px solid #1f1f1f;background:#111;color:#fff;font-size:16px}
-    #number{font-size:44px;color:#25D366;margin:12px 0}
+    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0}
+    input,button{
+      width:100%;box-sizing:border-box;padding:14px;border-radius:10px;
+      border:1px solid #333;background:#1f1f1f;color:#fff;font-size:16px
+    }
+    button{cursor:pointer}
+    button:hover{background:#2a2a2a}
+    .btnRow{display:flex;gap:10px}
+    .btnRow>*{flex:1}
+    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;font-weight:800}
+    #number{font-size:48px;color:#25D366;margin:12px 0}
     ul{list-style:none;padding:0;margin:0}
-    li{padding:8px;border-bottom:1px solid #161616;display:flex;justify-content:space-between}
-    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px}
+    li{padding:8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between}
+    .muted{color:#aaa;font-size:13px;line-height:1.4}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>ITO 🎲</h1>
+    <h1 style="margin:10px 0 0 0;">ITO 🎲</h1>
+    <div class="muted">Ordene o tema sem repetir números</div>
 
-    <div class="card" id="topInfo">
+    <div class="card">
       <div>Sala: <span class="code" id="roomIdText">------</span></div>
       <div>Você: <b id="nameText"></b></div>
-      <div id="roleText" style="color:#aaa;margin-top:6px;"></div>
+      <div class="muted" id="roleText" style="margin-top:6px;"></div>
     </div>
 
+    <!-- senha (só aparece se precisar) -->
     <div class="card" id="passwordCard">
-      <input id="passwordInput" placeholder="Digite a senha da sala" />
-      <button class="btn" id="btnEnter">Entrar</button>
-      <div style="color:#aaa;font-size:13px;margin-top:8px;">(A senha não fica salva para jogadores.)</div>
+      <input id="passwordInput" placeholder="Senha da sala" />
+      <button id="btnEnter">Entrar</button>
+      <div class="muted" style="margin-top:8px;">Jogadores digitam a senha aqui.</div>
     </div>
 
     <div class="card" id="gameCard" style="display:none;">
       <div id="masterControls" style="display:none;">
-        <button class="btn" id="btnDistribute">Distribuir cartas</button>
-        <button class="btn" id="btnReveal" style="margin-top:10px;">Revelar cartas</button>
+        <div class="btnRow">
+          <button id="btnDistribute">Distribuir</button>
+          <button id="btnReveal">Revelar</button>
+        </div>
       </div>
 
-      <button class="btn secondary" id="btnLeave" style="margin-top:10px;">Sair</button>
+      <button id="btnLeave" style="margin-top:10px;">Sair</button>
 
       <div id="number"></div>
       <div id="allNumbers"></div>
@@ -72,25 +81,24 @@
       socket.emit("joinRoom", { roomId, password, playerName: name });
     }
 
-    // Botão entrar (jogador)
+    // Jogador entra manualmente
     document.getElementById("btnEnter").onclick = () => {
       const password = document.getElementById("passwordInput").value.trim();
-      if (!roomId) return alert("Faltou o código da sala. Volte e entre novamente.");
-      if (!name) return alert("Faltou seu nome. Volte e entre novamente.");
+      if (!roomId) return alert("Código da sala ausente.");
+      if (!name) return alert("Nome ausente.");
       if (!password) return alert("Digite a senha.");
       joinRoomWith(password);
     };
 
-    // Mestre: tenta auto-entrar sem pedir senha de novo
-    (function autoJoinIfMaster() {
+    // Mestre entra automático (sem digitar senha de novo)
+    (function autoJoinMaster() {
       const savedPass = sessionStorage.getItem("tbr_master_password");
       const savedRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
 
-      if (savedPass && savedRoom && savedRoom === roomId) {
-        // tenta entrar automaticamente
-        joinRoomWith(savedPass);
-        // não mostramos o card de senha enquanto tenta
+      if (savedPass && savedRoom === roomId) {
+        // tenta entrar direto
         document.getElementById("passwordCard").style.display = "none";
+        joinRoomWith(savedPass);
       }
     })();
 
@@ -105,7 +113,6 @@
 
     document.getElementById("btnLeave").onclick = () => {
       socket.emit("leaveRoom", roomId);
-      // limpa credencial do mestre desse room
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
       window.location.href = "/";
@@ -113,7 +120,7 @@
 
     socket.on("errorMessage", (msg) => {
       alert(msg);
-      // se o autoJoin falhou (senha errada ou sala), mostra o card de senha de novo
+      // se o autoJoin falhar, mostra a senha
       document.getElementById("passwordCard").style.display = "block";
     });
 
@@ -132,21 +139,10 @@
       const ul = document.getElementById("players");
       ul.innerHTML = "";
 
-      // payload esperado: {players:[{name,isMaster}]}
       if (payload && payload.players) {
         payload.players.forEach(p => {
           const li = document.createElement("li");
           li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
-          ul.appendChild(li);
-        });
-        return;
-      }
-
-      // fallback antigo (array de nomes)
-      if (Array.isArray(payload)) {
-        payload.forEach(n => {
-          const li = document.createElement("li");
-          li.innerHTML = `<span>${n}</span><span></span>`;
           ul.appendChild(li);
         });
       }
