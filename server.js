@@ -6,10 +6,7 @@ const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
 app.use(express.static("public"));
@@ -17,13 +14,7 @@ app.use(express.static("public"));
 const MAX_PLAYERS_PER_ROOM = 8;
 
 const rooms = {};
-// roomId -> {
-//   password,
-//   gameType,
-//   masterId,
-//   players: {},   // socketId -> nome
-//   numbers: {}    // socketId -> numero
-// }
+// roomId -> { password, gameType, masterId, players:{}, numbers:{} }
 
 function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -65,15 +56,16 @@ function closeRoom(roomId) {
 }
 
 io.on("connection", (socket) => {
-  // ✅ Criar sala (mestre)
+  // Criar sala
   socket.on("createRoom", ({ roomId, password, masterName, gameType }) => {
     if (!masterName || !password) {
-      socket.emit("errorMessage", "Informe seu nome e uma senha para criar a sala.");
+      socket.emit("errorMessage", "Informe seu nome e uma senha.");
       return;
     }
 
     const gt = (gameType || "ito").toString().trim().toLowerCase();
 
+    // valida roomId vindo do cliente (UX)
     if (roomId) {
       roomId = String(roomId).trim().toUpperCase();
       const valid = /^[A-Z2-9]{6}$/.test(roomId);
@@ -103,12 +95,12 @@ io.on("connection", (socket) => {
     socket.join(roomId);
 
     socket.emit("master");
-    socket.emit("roomCreated", { roomId, gameType: rooms[roomId].gameType });
+    socket.emit("roomCreated", { roomId, gameType: gt });
 
     emitPlayersUpdate(roomId);
   });
 
-  // ✅ Entrar em sala (jogador)
+  // Entrar na sala
   socket.on("joinRoom", ({ roomId, password, playerName }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
@@ -117,30 +109,35 @@ io.on("connection", (socket) => {
       socket.emit("errorMessage", "Sala não existe");
       return;
     }
-
     if (room.password !== password) {
       socket.emit("errorMessage", "Senha incorreta");
       return;
     }
-
     if (Object.keys(room.players).length >= MAX_PLAYERS_PER_ROOM) {
       socket.emit("errorMessage", "Sala cheia");
       return;
     }
 
-    room.players[socket.id] = playerName || "Jogador";
+    room.players[socket.id] = (playerName || "Jogador").trim();
     socket.join(roomId);
 
     socket.emit("joinedRoom", { roomId, gameType: room.gameType });
+
+    // Se por acaso não existir mestre (pode acontecer se o mestre caiu),
+    // o primeiro que entrar vira mestre
+    if (!room.masterId) {
+      room.masterId = socket.id;
+      io.to(socket.id).emit("master");
+    }
+
     emitPlayersUpdate(roomId);
   });
 
-  // 🎲 Distribuir números (por sala)
+  // Distribuir (só mestre)
   socket.on("distribute", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-
     if (socket.id !== room.masterId) return;
 
     room.numbers = {};
@@ -152,12 +149,11 @@ io.on("connection", (socket) => {
     });
   });
 
-  // 😈 Revelar números (por sala) - maior -> menor
+  // Revelar (só mestre) - maior -> menor
   socket.on("reveal", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-
     if (socket.id !== room.masterId) return;
 
     const result = Object.keys(room.players)
@@ -170,22 +166,24 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("allNumbers", result);
   });
 
-  // 🚪 Sair da sala
+  // Sair (botão sair)
   socket.on("leaveRoom", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
 
-    // mestre fecha sala
+    // Se mestre clicou sair: FECHA sala (como você quer)
     if (socket.id === room.masterId) {
       closeRoom(roomId);
       return;
     }
 
+    // jogador saindo
     if (room.players[socket.id]) {
       delete room.players[socket.id];
       delete room.numbers[socket.id];
       socket.leave(roomId);
+
       emitPlayersUpdate(roomId);
 
       if (Object.keys(room.players).length === 0) {
@@ -194,7 +192,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🔌 Desconectar
+  // Disconnect (reload/troca de página etc.)
   socket.on("disconnect", () => {
     for (const roomId in rooms) {
       const room = rooms[roomId];
@@ -205,10 +203,15 @@ io.on("connection", (socket) => {
         delete room.players[socket.id];
         delete room.numbers[socket.id];
 
-        // mestre caiu: fecha sala
+        // ✅ IMPORTANTE: NÃO fecha a sala no disconnect do mestre
+        // (isso evita matar a sala quando ele muda de página)
         if (wasMaster) {
-          closeRoom(roomId);
-          continue;
+          const remaining = Object.keys(room.players);
+          room.masterId = remaining.length ? remaining[0] : null;
+
+          if (room.masterId) {
+            io.to(room.masterId).emit("master");
+          }
         }
 
         emitPlayersUpdate(roomId);
@@ -222,6 +225,4 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
