@@ -153,11 +153,12 @@
       }
     };
 
+    // Mestre -> criar sala
     document.getElementById("btnCreateRoomFinal").onclick = () => {
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
 
-      // salva só pro mestre não digitar duas vezes no ITO
+      // guarda só pra atravessar o redirecionamento (depois o ito.html apaga)
       sessionStorage.setItem("tbr_master_password", password);
       sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
@@ -169,12 +170,17 @@
       });
     };
 
+    // Jogador -> entrar na sala
     document.getElementById("btnJoinRoomFinal").onclick = () => {
       const roomId = document.getElementById("joinCode").value.trim().toUpperCase();
       const password = document.getElementById("joinPassword").value.trim();
 
       if (!roomId) return alert("Digite o código.");
       if (!password) return alert("Digite a senha.");
+
+      // guarda só pra atravessar o redirecionamento (depois o ito.html apaga)
+      sessionStorage.setItem("tbr_join_password", password);
+      sessionStorage.setItem("tbr_join_room", roomId);
 
       socket.emit("joinRoom", {
         roomId,
