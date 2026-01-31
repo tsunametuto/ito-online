@@ -31,6 +31,7 @@
     .kickBtn:hover{background:#2a2a2a}
     .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #333;background:#151515;color:#ddd;font-size:12px}
     .bigQ{font-size:18px;font-weight:800;color:#25D366}
+
     .voteBtn{
       padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer;
       min-width:120px;
@@ -41,9 +42,15 @@
       background:#152016;
       font-weight:800;
     }
-    .voteBtn.voted::after{
-      content:" ✅";
+    .voteBtn.voted::after{content:" ✅"}
+
+    /* Botão verde de confirmação (enviar) */
+    .okBtn{
+      border:2px solid #25D366 !important;
+      background:#152016 !important;
+      font-weight:900 !important;
     }
+    .okBtn::after{content:" ✅"}
 
     .resultBox{
       text-align:left;
@@ -183,7 +190,7 @@
     // estado local para UI
     let tokenToName = {};        // token -> nome
     let latestVotesByVoter = {}; // voterToken -> targetToken
-    let latestPlayers = [];      // [{token,name,isMaster,online,isActive,hasAnswered}...]
+    let latestPlayers = [];      // spyState players
 
     const passwordCard = document.getElementById("passwordCard");
     const mainCard = document.getElementById("mainCard");
@@ -196,6 +203,9 @@
     const roleText = document.getElementById("roleText");
     const connText = document.getElementById("connText");
     const phasePill = document.getElementById("phasePill");
+
+    const btnSend = document.getElementById("btnSend");
+    let sentAnswer = false;
 
     function storeSessionKey(key){
       if (!roomId) return;
@@ -254,7 +264,6 @@
     }
 
     function renderVoteButtons(){
-      // destaca o meu voto atual
       const myVote = latestVotesByVoter[playerToken];
 
       document.querySelectorAll("[data-vote-token]").forEach(btn => {
@@ -267,6 +276,32 @@
           btn.textContent = "Votar";
         }
       });
+    }
+
+    function updateMasterAnswerStatus(state){
+      // Só faz sentido na fase answering
+      if (!isMaster || !state || state.phase !== "answering" || !state.players) return;
+
+      const active = state.players.filter(p => p.isActive);
+      const answered = active.filter(p => p.hasAnswered);
+
+      // Atualiza pill por jogador
+      state.players.forEach(p => {
+        const el = document.getElementById(`status-${p.token}`);
+        if (!el) return;
+
+        el.classList.remove("hidden");
+
+        if (!p.isActive) {
+          el.textContent = "Fora da rodada";
+          return;
+        }
+        el.textContent = p.hasAnswered ? "✅ Respondeu" : "⏳ Aguardando";
+      });
+
+      // contador pro mestre
+      const info = document.getElementById("answerInfo");
+      if (info) info.textContent = `Mestre: ${answered.length}/${active.length} respostas recebidas.`;
     }
 
     socket.on("connect", () => {
@@ -284,6 +319,12 @@
       document.getElementById("answerInfo").textContent = "";
       document.getElementById("answerText").value = "";
       document.getElementById("voteInfo").textContent = "";
+
+      // reset do botão enviar
+      sentAnswer = false;
+      btnSend.classList.remove("okBtn");
+      btnSend.textContent = "Enviar resposta";
+      btnSend.disabled = false;
     };
 
     document.getElementById("btnReveal").onclick = () => {
@@ -294,7 +335,7 @@
       socket.emit("spyRevealSpy", roomId);
     };
 
-    document.getElementById("btnSend").onclick = () => {
+    btnSend.onclick = () => {
       const text = document.getElementById("answerText").value.trim();
       socket.emit("spySubmitAnswer", { roomId, text });
     };
@@ -347,12 +388,21 @@
 
         payload.players.forEach(p => {
           const li = document.createElement("li");
+          li.setAttribute("data-player-token", p.token);
 
           const left = document.createElement("span");
           left.textContent = p.name + (p.isMaster ? " 👑" : "");
 
           const right = document.createElement("span");
           right.className = "right";
+
+          // ✅ status (mestre)
+          const status = document.createElement("span");
+          status.className = "pill";
+          status.id = `status-${p.token}`;
+          status.textContent = "";
+          if (!isMaster) status.classList.add("hidden");
+          right.appendChild(status);
 
           const dot = document.createElement("span");
           dot.className = p.online ? "onlineDot" : "offlineDot";
@@ -382,10 +432,22 @@
       document.getElementById("yourQuestion").textContent = question;
       document.getElementById("answerInfo").textContent = "";
       setPhase("answering");
+
+      // reset do botão enviar sempre que começa answering
+      sentAnswer = false;
+      btnSend.classList.remove("okBtn");
+      btnSend.textContent = "Enviar resposta";
+      btnSend.disabled = false;
     });
 
     socket.on("spyAnsweredOK", () => {
       document.getElementById("answerInfo").textContent = "Enviado ✅ Aguarde o mestre revelar as respostas.";
+
+      // ✅ botão enviar fica verde (sem salvar resposta)
+      sentAnswer = true;
+      btnSend.classList.add("okBtn");
+      btnSend.textContent = "Enviado";
+      btnSend.disabled = true;
     });
 
     socket.on("spyRoundCancelled", (msg) => {
@@ -416,18 +478,16 @@
     socket.on("spyRevealed", ({ spyToken, spyName, topVotedToken, topVotedName, tally, principal, paralela }) => {
       setPhase("revealed");
 
-      const getVotes = (targetToken) => {
+      const getVoters = (targetToken) => {
         const voters = [];
         for (const voterToken in (latestVotesByVoter || {})) {
-          if (latestVotesByVoter[voterToken] === targetToken) {
-            voters.push(voterToken);
-          }
+          if (latestVotesByVoter[voterToken] === targetToken) voters.push(voterToken);
         }
         return voters;
       };
 
-      const votersTop = getVotes(topVotedToken);
-      const votersSpy = getVotes(spyToken);
+      const votersTop = getVoters(topVotedToken);
+      const votersSpy = getVoters(spyToken);
 
       const topCount = tally && tally[topVotedToken] ? tally[topVotedToken] : 0;
       const spyCount = tally && tally[spyToken] ? tally[spyToken] : 0;
@@ -474,7 +534,10 @@
       latestVotesByVoter = state.votesByVoter || {};
       latestPlayers = state.players || [];
 
-      // monta a lista de votação usando players ativos
+      // Mestre: status de resposta
+      updateMasterAnswerStatus(state);
+
+      // Monta votação
       if (state.phase === "voting" && state.players) {
         const active = state.players.filter(p => p.isActive);
 
@@ -500,14 +563,19 @@
 
         renderVoteButtons();
       } else {
-        // se sair da fase voting, limpa
         if (state.phase !== "voting") {
           document.getElementById("voteList").innerHTML = "";
         }
       }
 
-      // sempre que o estado atualizar, refletir confirmação do voto
+      // Confirmação do voto sempre atualiza
       if (state.phase === "voting") renderVoteButtons();
+
+      // Se não for fase answering, limpa contador do mestre do answerInfo
+      if (state.phase !== "answering") {
+        const info = document.getElementById("answerInfo");
+        if (info && !sentAnswer) info.textContent = "";
+      }
     });
 
     socket.on("roomClosed", () => {
