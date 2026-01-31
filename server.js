@@ -13,27 +13,31 @@ app.use(express.static("public"));
 
 const MAX_PLAYERS_PER_ROOM = 8;
 
-// segurar sala vazia por um tempo (troca de página)
+// Sala vazia: segurar por um tempo (troca de página / reload)
 const EMPTY_ROOM_GRACE_MS = 60_000;
+
+// Jogador desconectado (suspensão): tolerância para voltar sem perder lugar
+const RECONNECT_GRACE_MS = 90_000;
 
 const rooms = {};
 // roomId -> {
 //   password,
 //   gameType,
-//   masterId,
-//   players: {},   // socketId -> nome
-//   numbers: {},   // ITO: socketId -> numero
-//   emptyTimer: Timeout|null,
+//   masterToken,
+//   players: { token: { name, socketId, online, disconnectTimer } },
+//   sessions: { token: sessionKey },
+//   banned: Set(token),
+//   numbers: { token: number },
+//   emptyTimer,
 //
-//   // Quem sou eu:
 //   qse: {
-//     phase: "lobby"|"writing"|"playing",
-//     active: Set<string>,                 // participantes ativos da rodada
-//     writingTargetByWriter: {},           // writerId -> targetId (apenas info durante writing)
-//     submittedByWriter: {},               // writerId -> true/false
-//     submissionTextByWriter: {},          // writerId -> string
-//     characterByTarget: {},               // targetId -> character
-//     revealedToTarget: {},                // targetId -> true/false
+//     phase,
+//     active: Set(token),
+//     submittedByWriter: { token: bool },
+//     submissionTextByWriter: { token: string },
+//     characterByTarget: { token: string },
+//     revealedToTarget: { token: bool },
+//     writingTargetByWriter: { token: token }, // só informativo durante writing
 //   }
 // }
 
@@ -42,6 +46,11 @@ function generateRoomId() {
   let out = "";
   for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
+}
+
+function generateSessionKey() {
+  // simples e suficiente pro nosso caso (não é login bancário)
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
 function cancelEmptyRoomDeletion(roomId) {
@@ -69,47 +78,55 @@ function scheduleEmptyRoomDeletion(roomId) {
   }, EMPTY_ROOM_GRACE_MS);
 }
 
+function emitPlayersUpdate(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  const players = Object.keys(room.players).map((token) => ({
+    token,
+    name: room.players[token].name,
+    isMaster: token === room.masterToken,
+    online: !!room.players[token].online,
+  }));
+
+  io.to(roomId).emit("playersUpdate", {
+    roomId,
+    players,
+    masterToken: room.masterToken,
+    gameType: room.gameType,
+  });
+}
+
 function closeRoom(roomId) {
   const room = rooms[roomId];
   if (!room) return;
 
   io.to(roomId).emit("roomClosed");
 
-  for (const id of Object.keys(room.players)) {
-    const s = io.sockets.sockets.get(id);
-    if (s) s.leave(roomId);
+  // desconecta todos sockets da sala (se existirem)
+  for (const token of Object.keys(room.players)) {
+    const sid = room.players[token].socketId;
+    if (sid) {
+      const s = io.sockets.sockets.get(sid);
+      if (s) s.leave(roomId);
+    }
+    if (room.players[token].disconnectTimer) {
+      clearTimeout(room.players[token].disconnectTimer);
+      room.players[token].disconnectTimer = null;
+    }
   }
 
   cancelEmptyRoomDeletion(roomId);
   delete rooms[roomId];
 }
 
-function emitPlayersUpdate(roomId) {
-  const room = rooms[roomId];
-  if (!room) return;
-
-  const players = Object.keys(room.players).map((id) => ({
-    id,
-    name: room.players[id],
-    isMaster: id === room.masterId,
-  }));
-
-  io.to(roomId).emit("playersUpdate", {
-    roomId,
-    players,
-    masterId: room.masterId,
-    gameType: room.gameType,
-  });
-}
-
-/** Gera uma permutação sem ninguém apontar pra si mesmo (derangement).
- * Se não conseguir em algumas tentativas (raro), usa um ciclo simples.
+/** Derangement (ninguém aponta pra si).
+ * Se não achar em tentativas, usa ciclo.
  */
 function derangement(ids) {
   const n = ids.length;
   if (n < 2) return null;
 
-  // tentativa aleatória
   for (let attempt = 0; attempt < 50; attempt++) {
     const perm = [...ids].sort(() => Math.random() - 0.5);
     let ok = true;
@@ -123,26 +140,23 @@ function derangement(ids) {
     }
   }
 
-  // fallback determinístico: ciclo
   const map = {};
-  for (let i = 0; i < n; i++) {
-    map[ids[i]] = ids[(i + 1) % n];
-  }
+  for (let i = 0; i < n; i++) map[ids[i]] = ids[(i + 1) % n];
   return map;
 }
 
-/* ---------------- Quem sou eu: helpers ---------------- */
+/* ---------- QSE helpers ---------- */
 
 function ensureQse(room) {
   if (!room.qse) {
     room.qse = {
       phase: "lobby",
       active: new Set(),
-      writingTargetByWriter: {},
       submittedByWriter: {},
       submissionTextByWriter: {},
       characterByTarget: {},
       revealedToTarget: {},
+      writingTargetByWriter: {},
     };
   }
 }
@@ -151,11 +165,11 @@ function qseResetRound(room) {
   ensureQse(room);
   room.qse.phase = "lobby";
   room.qse.active = new Set();
-  room.qse.writingTargetByWriter = {};
   room.qse.submittedByWriter = {};
   room.qse.submissionTextByWriter = {};
   room.qse.characterByTarget = {};
   room.qse.revealedToTarget = {};
+  room.qse.writingTargetByWriter = {};
 }
 
 function qseEmitPhase(roomId) {
@@ -170,11 +184,12 @@ function qseEmitWritingStatus(roomId) {
   if (!room) return;
   ensureQse(room);
 
-  const status = Object.keys(room.players).map((id) => ({
-    id,
-    name: room.players[id],
-    submitted: !!room.qse.submittedByWriter[id],
-    active: room.qse.active.has(id),
+  const status = Object.keys(room.players).map((token) => ({
+    token,
+    name: room.players[token].name,
+    submitted: !!room.qse.submittedByWriter[token],
+    active: room.qse.active.has(token),
+    online: !!room.players[token].online,
   }));
 
   io.to(roomId).emit("qseWritingStatus", status);
@@ -185,39 +200,172 @@ function qseEmitOthersCharacters(roomId) {
   if (!room) return;
   ensureQse(room);
 
-  const activeIds = Array.from(room.qse.active);
-
-  // monta lista "targetId -> character"
+  const activeTokens = Array.from(room.qse.active);
   const byTarget = room.qse.characterByTarget;
 
-  // para cada jogador ativo: envia lista dos outros (nome + character)
-  activeIds.forEach((viewerId) => {
-    const list = activeIds
-      .filter((targetId) => targetId !== viewerId)
-      .map((targetId) => ({
-        id: targetId,
-        name: room.players[targetId],
-        character: byTarget[targetId],
+  // cada jogador ativo recebe a lista dos outros (nome + personagem), menos o próprio
+  activeTokens.forEach((viewerToken) => {
+    const viewerSid = room.players[viewerToken]?.socketId;
+    if (!viewerSid) return; // offline
+
+    const list = activeTokens
+      .filter((targetToken) => targetToken !== viewerToken)
+      .map((targetToken) => ({
+        token: targetToken,
+        name: room.players[targetToken]?.name || "Jogador",
+        character: byTarget[targetToken],
       }));
 
-    io.to(viewerId).emit("qseOthersCharacters", list);
+    io.to(viewerSid).emit("qseOthersCharacters", list);
   });
 
-  // jogador excluído recebe aviso
-  Object.keys(room.players).forEach((id) => {
-    if (!room.qse.active.has(id)) {
-      io.to(id).emit("qseExcluded");
+  // quem ficou fora recebe aviso (se online)
+  Object.keys(room.players).forEach((token) => {
+    if (!room.qse.active.has(token)) {
+      const sid = room.players[token].socketId;
+      if (sid) io.to(sid).emit("qseExcluded");
     }
   });
 }
 
-/* ---------------- Socket ---------------- */
+/* ---------- Disconnect grace ---------- */
+
+function schedulePlayerRemoval(roomId, token) {
+  const room = rooms[roomId];
+  if (!room) return;
+  const p = room.players[token];
+  if (!p) return;
+
+  if (p.disconnectTimer) return;
+
+  p.disconnectTimer = setTimeout(() => {
+    const r = rooms[roomId];
+    if (!r) return;
+    const pp = r.players[token];
+    if (!pp) return;
+
+    // se voltou online, não remove
+    if (pp.online) {
+      pp.disconnectTimer = null;
+      return;
+    }
+
+    // remove definitivo
+    delete r.players[token];
+    delete r.sessions[token];
+    delete r.numbers[token];
+
+    if (r.qse) {
+      r.qse.active.delete(token);
+      delete r.qse.submittedByWriter[token];
+      delete r.qse.submissionTextByWriter[token];
+      delete r.qse.characterByTarget[token];
+      delete r.qse.revealedToTarget[token];
+      delete r.qse.writingTargetByWriter[token];
+    }
+
+    // se era mestre: transfere para alguém que restou (preferência online)
+    if (r.masterToken === token) {
+      const remaining = Object.keys(r.players);
+      if (remaining.length) {
+        const onlineFirst = remaining.find(t => r.players[t].online) || remaining[0];
+        r.masterToken = onlineFirst;
+        const sid = r.players[onlineFirst].socketId;
+        if (sid) io.to(sid).emit("master");
+      } else {
+        r.masterToken = null;
+      }
+    }
+
+    // se sala vazia, agenda delete
+    if (Object.keys(r.players).length === 0) {
+      scheduleEmptyRoomDeletion(roomId);
+    }
+
+    emitPlayersUpdate(roomId);
+    if (r.gameType === "quem-sou-eu") {
+      qseEmitWritingStatus(roomId);
+    }
+  }, RECONNECT_GRACE_MS);
+}
+
+function cancelPlayerRemoval(roomId, token) {
+  const room = rooms[roomId];
+  if (!room) return;
+  const p = room.players[token];
+  if (!p) return;
+
+  if (p.disconnectTimer) {
+    clearTimeout(p.disconnectTimer);
+    p.disconnectTimer = null;
+  }
+}
+
+/* ---------- Kick ---------- */
+
+function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  // ban até a sala fechar
+  room.banned.add(token);
+
+  const p = room.players[token];
+  if (p) {
+    const sid = p.socketId;
+    if (sid) {
+      io.to(sid).emit("kicked", { reason });
+      const s = io.sockets.sockets.get(sid);
+      if (s) s.disconnect(true);
+    }
+  }
+
+  // remove imediatamente
+  delete room.players[token];
+  delete room.sessions[token];
+  delete room.numbers[token];
+
+  if (room.qse) {
+    room.qse.active.delete(token);
+    delete room.qse.submittedByWriter[token];
+    delete room.qse.submissionTextByWriter[token];
+    delete room.qse.characterByTarget[token];
+    delete room.qse.revealedToTarget[token];
+    delete room.qse.writingTargetByWriter[token];
+  }
+
+  // se expulsou o mestre (não deveria acontecer), ajusta
+  if (room.masterToken === token) {
+    const remaining = Object.keys(room.players);
+    if (remaining.length) {
+      const onlineFirst = remaining.find(t => room.players[t].online) || remaining[0];
+      room.masterToken = onlineFirst;
+      const sid = room.players[onlineFirst].socketId;
+      if (sid) io.to(sid).emit("master");
+    } else {
+      room.masterToken = null;
+    }
+  }
+
+  emitPlayersUpdate(roomId);
+  if (room.gameType === "quem-sou-eu") qseEmitWritingStatus(roomId);
+
+  if (Object.keys(room.players).length === 0) {
+    scheduleEmptyRoomDeletion(roomId);
+  }
+}
+
+/* ---------- Socket ---------- */
 
 io.on("connection", (socket) => {
   // Criar sala
-  socket.on("createRoom", ({ roomId, password, masterName, gameType }) => {
+  socket.on("createRoom", ({ roomId, password, masterName, gameType, playerToken }) => {
     if (!masterName || !password) {
       socket.emit("errorMessage", "Informe seu nome e uma senha.");
+      return;
+    }
+    if (!playerToken) {
+      socket.emit("errorMessage", "Token inválido. Recarregue a página.");
       return;
     }
 
@@ -243,24 +391,41 @@ io.on("connection", (socket) => {
     rooms[roomId] = {
       password,
       gameType: gt,
-      masterId: socket.id,
+      masterToken: playerToken,
       players: {},
+      sessions: {},
+      banned: new Set(),
       numbers: {},
       emptyTimer: null,
       qse: null,
     };
 
-    rooms[roomId].players[socket.id] = masterName;
+    rooms[roomId].players[playerToken] = {
+      name: masterName.trim(),
+      socketId: socket.id,
+      online: true,
+      disconnectTimer: null,
+    };
+
+    const sessionKey = generateSessionKey();
+    rooms[roomId].sessions[playerToken] = sessionKey;
+
     socket.join(roomId);
 
     socket.emit("master");
-    socket.emit("roomCreated", { roomId, gameType: gt });
+    socket.emit("roomCreated", { roomId, gameType: gt, sessionKey });
 
     emitPlayersUpdate(roomId);
+
+    if (gt === "quem-sou-eu") {
+      ensureQse(rooms[roomId]);
+      qseEmitPhase(roomId);
+      qseEmitWritingStatus(roomId);
+    }
   });
 
-  // Entrar na sala
-  socket.on("joinRoom", ({ roomId, password, playerName }) => {
+  // Entrar/Reconectar na sala
+  socket.on("joinRoom", ({ roomId, password, playerName, playerToken, sessionKey }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
 
@@ -268,55 +433,131 @@ io.on("connection", (socket) => {
       socket.emit("errorMessage", "Sala não existe");
       return;
     }
+    if (!playerToken) {
+      socket.emit("errorMessage", "Token inválido. Recarregue a página.");
+      return;
+    }
+    if (room.banned.has(playerToken)) {
+      socket.emit("errorMessage", "Você foi expulso dessa sala.");
+      return;
+    }
 
     cancelEmptyRoomDeletion(roomId);
 
-    if (room.password !== password) {
-      socket.emit("errorMessage", "Senha incorreta");
-      return;
+    // Reconnect por sessionKey (sem senha)
+    const hasSession = room.sessions[playerToken] && sessionKey && room.sessions[playerToken] === sessionKey;
+
+    if (!hasSession) {
+      // primeira entrada: exige senha
+      if (room.password !== password) {
+        socket.emit("errorMessage", "Senha incorreta");
+        return;
+      }
+
+      // sala cheia: conta tokens (mesmo offline) — você pode mudar para só online se quiser
+      if (!room.players[playerToken] && Object.keys(room.players).length >= MAX_PLAYERS_PER_ROOM) {
+        socket.emit("errorMessage", "Sala cheia");
+        return;
+      }
+
+      // gera sessionKey e guarda
+      room.sessions[playerToken] = generateSessionKey();
     }
 
-    if (Object.keys(room.players).length >= MAX_PLAYERS_PER_ROOM) {
-      socket.emit("errorMessage", "Sala cheia");
-      return;
+    // se já existia jogador, só atualiza; senão cria
+    if (!room.players[playerToken]) {
+      room.players[playerToken] = {
+        name: (playerName || "Jogador").trim(),
+        socketId: socket.id,
+        online: true,
+        disconnectTimer: null,
+      };
+    } else {
+      room.players[playerToken].name = (playerName || room.players[playerToken].name || "Jogador").trim();
+      room.players[playerToken].socketId = socket.id;
+      room.players[playerToken].online = true;
+      cancelPlayerRemoval(roomId, playerToken);
     }
 
-    room.players[socket.id] = (playerName || "Jogador").trim();
     socket.join(roomId);
 
-    socket.emit("joinedRoom", { roomId, gameType: room.gameType });
-
-    // se não tiver mestre
-    if (!room.masterId) {
-      room.masterId = socket.id;
-      io.to(socket.id).emit("master");
+    // se não tiver mestre, define
+    if (!room.masterToken) {
+      room.masterToken = playerToken;
+      socket.emit("master");
     }
 
-    // se o jogo for quem-sou-eu, garante estrutura
-    if (room.gameType === "quem-sou-eu") {
-      ensureQse(room);
-      // se entrar no meio da rodada, ele fica fora (rodada atual não inclui)
-      qseEmitPhase(roomId);
-      qseEmitWritingStatus(roomId);
+    // se o jogador que entrou é o mestre
+    if (room.masterToken === playerToken) {
+      socket.emit("master");
     }
+
+    socket.emit("joinedRoom", { roomId, gameType: room.gameType, sessionKey: room.sessions[playerToken] });
 
     emitPlayersUpdate(roomId);
+
+    if (room.gameType === "quem-sou-eu") {
+      ensureQse(room);
+      qseEmitPhase(roomId);
+      qseEmitWritingStatus(roomId);
+
+      // se a rodada já está em playing e ele é ativo, reenvia lista dos outros
+      if (room.qse.phase === "playing" && room.qse.active.has(playerToken)) {
+        // manda novamente lista dos outros pra ele (apenas ele)
+        const activeTokens = Array.from(room.qse.active);
+        const list = activeTokens
+          .filter(t => t !== playerToken)
+          .map(t => ({
+            token: t,
+            name: room.players[t]?.name || "Jogador",
+            character: room.qse.characterByTarget[t],
+          }));
+        io.to(socket.id).emit("qseOthersCharacters", list);
+
+        // se já foi revelado, manda também
+        if (room.qse.revealedToTarget[playerToken]) {
+          io.to(socket.id).emit("qseYourCharacter", { character: room.qse.characterByTarget[playerToken] });
+        }
+      }
+    }
   });
 
-  /* -------- ITO -------- */
+  // Mestre expulsa jogador
+  socket.on("kickPlayer", ({ roomId, targetToken }) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room) return;
+
+    // identificar quem é este socket (token)
+    const kickerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!kickerToken) return;
+
+    if (room.masterToken !== kickerToken) return;
+    if (!targetToken) return;
+    if (targetToken === room.masterToken) return;
+
+    kickPlayer(roomId, targetToken);
+  });
+
+  /* -------- ITO (De 1 a 100) -------- */
 
   socket.on("distribute", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-    if (socket.id !== room.masterId) return;
+
+    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!callerToken) return;
+    if (callerToken !== room.masterToken) return;
 
     room.numbers = {};
+    const tokens = Object.keys(room.players).filter(t => room.players[t].online);
     const pool = Array.from({ length: 100 }, (_, i) => i + 1).sort(() => Math.random() - 0.5);
 
-    Object.keys(room.players).forEach((playerId, index) => {
-      room.numbers[playerId] = pool[index];
-      io.to(playerId).emit("number", pool[index]);
+    tokens.forEach((token, index) => {
+      room.numbers[token] = pool[index];
+      const sid = room.players[token].socketId;
+      if (sid) io.to(sid).emit("number", pool[index]);
     });
   });
 
@@ -324,77 +565,78 @@ io.on("connection", (socket) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-    if (socket.id !== room.masterId) return;
+
+    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!callerToken) return;
+    if (callerToken !== room.masterToken) return;
 
     const result = Object.keys(room.players)
-      .map((playerId) => ({
-        name: room.players[playerId],
-        number: room.numbers[playerId],
+      .map((token) => ({
+        name: room.players[token].name,
+        number: room.numbers[token],
       }))
       .sort((a, b) => (b.number ?? -1) - (a.number ?? -1));
 
     io.to(roomId).emit("allNumbers", result);
   });
 
-  /* -------- QUEM SOU EU -------- */
+  /* -------- EU SOU... (Quem sou eu?) -------- */
 
-  // Mestre inicia rodada: começa a fase de escrita com pareamento aleatório
   socket.on("qseStartRound", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-
-    if (socket.id !== room.masterId) return;
     if (room.gameType !== "quem-sou-eu") return;
+
+    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!callerToken) return;
+    if (callerToken !== room.masterToken) return;
 
     ensureQse(room);
     qseResetRound(room);
 
-    const ids = Object.keys(room.players);
-    if (ids.length < 2) {
-      socket.emit("errorMessage", "Precisa de pelo menos 2 jogadores para iniciar.");
+    const tokens = Object.keys(room.players).filter(t => room.players[t].online);
+    if (tokens.length < 2) {
+      socket.emit("errorMessage", "Precisa de pelo menos 2 jogadores online para iniciar.");
       return;
     }
 
-    const map = derangement(ids);
+    const map = derangement(tokens);
     if (!map) {
-      socket.emit("errorMessage", "Não foi possível iniciar a rodada agora. Tente novamente.");
+      socket.emit("errorMessage", "Não foi possível iniciar a rodada. Tente novamente.");
       return;
     }
 
     room.qse.phase = "writing";
-    room.qse.active = new Set(ids);
+    room.qse.active = new Set(tokens);
     room.qse.writingTargetByWriter = map;
-    room.qse.submittedByWriter = {};
-    room.qse.submissionTextByWriter = {};
-    room.qse.characterByTarget = {};
-    room.qse.revealedToTarget = {};
 
-    // manda pra cada writer pra quem ele vai escrever
-    ids.forEach((writerId) => {
-      const targetId = map[writerId];
-      const targetName = room.players[targetId];
-      io.to(writerId).emit("qseYourTarget", { targetId, targetName });
+    tokens.forEach((writerToken) => {
+      const targetToken = map[writerToken];
+      const targetName = room.players[targetToken]?.name || "Jogador";
+      const sid = room.players[writerToken].socketId;
+      if (sid) io.to(sid).emit("qseYourTarget", { targetToken, targetName });
     });
 
     qseEmitPhase(roomId);
     qseEmitWritingStatus(roomId);
   });
 
-  // Jogador envia personagem
   socket.on("qseSubmit", ({ roomId, text }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
     if (room.gameType !== "quem-sou-eu") return;
 
+    const token = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!token) return;
+
     ensureQse(room);
     if (room.qse.phase !== "writing") {
       socket.emit("errorMessage", "Não estamos na fase de escrita.");
       return;
     }
-
-    if (!room.qse.active.has(socket.id)) {
+    if (!room.qse.active.has(token)) {
       socket.emit("errorMessage", "Você não está ativo nessa rodada.");
       return;
     }
@@ -409,34 +651,33 @@ io.on("connection", (socket) => {
       return;
     }
 
-    room.qse.submittedByWriter[socket.id] = true;
-    room.qse.submissionTextByWriter[socket.id] = clean;
+    room.qse.submittedByWriter[token] = true;
+    room.qse.submissionTextByWriter[token] = clean;
 
-    // feedback pro jogador
     socket.emit("qseSubmittedOK");
-
     qseEmitWritingStatus(roomId);
   });
 
-  // Mestre fecha escrita: exclui quem não enviou e recalcula rodada só com quem enviou
   socket.on("qseCloseWriting", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-    if (socket.id !== room.masterId) return;
     if (room.gameType !== "quem-sou-eu") return;
+
+    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!callerToken) return;
+    if (callerToken !== room.masterToken) return;
 
     ensureQse(room);
     if (room.qse.phase !== "writing") return;
 
-    const allIds = Array.from(room.qse.active);
+    const allActive = Array.from(room.qse.active);
 
     // mantém apenas quem enviou
-    const activeIds = allIds.filter((id) => !!room.qse.submittedByWriter[id]);
+    const survivors = allActive.filter(t => !!room.qse.submittedByWriter[t]);
 
-    if (activeIds.length < 2) {
-      // não dá pra jogar
-      room.qse.active = new Set(activeIds);
+    if (survivors.length < 2) {
+      room.qse.active = new Set(survivors);
       room.qse.phase = "lobby";
       qseEmitPhase(roomId);
       qseEmitWritingStatus(roomId);
@@ -444,68 +685,61 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // agora fazemos um novo embaralhamento ENTRE QUEM ENVIOU
-    const map = derangement(activeIds);
+    // recalcula embaralhamento apenas entre quem enviou
+    const map = derangement(survivors);
     if (!map) {
       room.qse.phase = "lobby";
       qseEmitPhase(roomId);
-      io.to(roomId).emit("qseRoundCancelled", "Não foi possível recalcular. Tente iniciar de novo.");
+      io.to(roomId).emit("qseRoundCancelled", "Não foi possível recalcular. Inicie novamente.");
       return;
     }
 
-    // define participantes ativos finais
-    room.qse.active = new Set(activeIds);
-
-    // monta personagens finais por alvo:
-    // cada writer mantém o texto enviado, mas agora ele vai para um alvo do novo embaralhamento
+    room.qse.active = new Set(survivors);
     room.qse.characterByTarget = {};
-    activeIds.forEach((writerId) => {
-      const targetId = map[writerId];
-      room.qse.characterByTarget[targetId] = room.qse.submissionTextByWriter[writerId];
-    });
-
     room.qse.revealedToTarget = {};
 
-    // muda fase
+    survivors.forEach((writerToken) => {
+      const targetToken = map[writerToken];
+      room.qse.characterByTarget[targetToken] = room.qse.submissionTextByWriter[writerToken];
+    });
+
     room.qse.phase = "playing";
 
     qseEmitPhase(roomId);
     qseEmitWritingStatus(roomId);
-
-    // manda lista de personagens dos outros pra cada um
     qseEmitOthersCharacters(roomId);
   });
 
-  // Mestre revela para um jogador específico
-  socket.on("qseRevealTo", ({ roomId, targetId }) => {
+  socket.on("qseRevealTo", ({ roomId, targetToken }) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
     const room = rooms[roomId];
     if (!room) return;
-
-    if (socket.id !== room.masterId) return;
     if (room.gameType !== "quem-sou-eu") return;
+
+    const callerToken = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!callerToken) return;
+    if (callerToken !== room.masterToken) return;
 
     ensureQse(room);
     if (room.qse.phase !== "playing") return;
 
-    if (!room.qse.active.has(targetId)) {
+    if (!room.qse.active.has(targetToken)) {
       socket.emit("errorMessage", "Esse jogador não está ativo nessa rodada.");
       return;
     }
 
-    const character = room.qse.characterByTarget[targetId];
+    const character = room.qse.characterByTarget[targetToken];
     if (!character) {
       socket.emit("errorMessage", "Sem personagem para esse jogador.");
       return;
     }
 
-    room.qse.revealedToTarget[targetId] = true;
-    io.to(targetId).emit("qseYourCharacter", { character });
+    room.qse.revealedToTarget[targetToken] = true;
 
-    // atualiza lista pro mestre (marca revelados)
-    io.to(roomId).emit("qseRevealedUpdate", {
-      revealedToTarget: room.qse.revealedToTarget,
-    });
+    const sid = room.players[targetToken]?.socketId;
+    if (sid) io.to(sid).emit("qseYourCharacter", { character });
+
+    io.to(roomId).emit("qseRevealedUpdate", { revealedToTarget: room.qse.revealedToTarget });
   });
 
   /* -------- Sair / disconnect -------- */
@@ -515,68 +749,56 @@ io.on("connection", (socket) => {
     const room = rooms[roomId];
     if (!room) return;
 
-    // mestre sai: fecha sala
-    if (socket.id === room.masterId) {
+    const token = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+    if (!token) return;
+
+    // mestre saiu explicitamente -> fecha sala
+    if (token === room.masterToken) {
       closeRoom(roomId);
       return;
     }
 
-    if (room.players[socket.id]) {
-      delete room.players[socket.id];
-      delete room.numbers[socket.id];
+    // remove jogador imediatamente
+    cancelPlayerRemoval(roomId, token);
 
-      // limpa qse se existir
-      if (room.qse) {
-        room.qse.active.delete(socket.id);
-        delete room.qse.submittedByWriter[socket.id];
-        delete room.qse.submissionTextByWriter[socket.id];
-        delete room.qse.characterByTarget[socket.id];
-        delete room.qse.revealedToTarget[socket.id];
-      }
+    delete room.players[token];
+    delete room.sessions[token];
+    delete room.numbers[token];
 
-      socket.leave(roomId);
+    if (room.qse) {
+      room.qse.active.delete(token);
+      delete room.qse.submittedByWriter[token];
+      delete room.qse.submissionTextByWriter[token];
+      delete room.qse.characterByTarget[token];
+      delete room.qse.revealedToTarget[token];
+      delete room.qse.writingTargetByWriter[token];
+    }
 
-      emitPlayersUpdate(roomId);
-      if (room.gameType === "quem-sou-eu") {
-        qseEmitWritingStatus(roomId);
-      }
+    socket.leave(roomId);
 
-      if (Object.keys(room.players).length === 0) {
-        cancelEmptyRoomDeletion(roomId);
-        delete rooms[roomId];
-      }
+    emitPlayersUpdate(roomId);
+    if (room.gameType === "quem-sou-eu") qseEmitWritingStatus(roomId);
+
+    if (Object.keys(room.players).length === 0) {
+      scheduleEmptyRoomDeletion(roomId);
     }
   });
 
   socket.on("disconnect", () => {
+    // acha em quais salas esse socket estava
     for (const roomId in rooms) {
       const room = rooms[roomId];
-      if (!room.players[socket.id]) continue;
+      const token = Object.keys(room.players).find(t => room.players[t].socketId === socket.id);
+      if (!token) continue;
 
-      const wasMaster = room.masterId === socket.id;
+      room.players[token].online = false;
+      room.players[token].socketId = null;
 
-      delete room.players[socket.id];
-      delete room.numbers[socket.id];
-
-      if (room.qse) {
-        room.qse.active.delete(socket.id);
-        delete room.qse.submittedByWriter[socket.id];
-        delete room.qse.submissionTextByWriter[socket.id];
-        delete room.qse.characterByTarget[socket.id];
-        delete room.qse.revealedToTarget[socket.id];
-      }
-
-      // se mestre caiu, passa cargo
-      if (wasMaster) {
-        const remaining = Object.keys(room.players);
-        room.masterId = remaining.length ? remaining[0] : null;
-        if (room.masterId) io.to(room.masterId).emit("master");
-      }
+      // NÃO remove imediatamente: dá tempo para reconectar sem perder lugar
+      schedulePlayerRemoval(roomId, token);
 
       emitPlayersUpdate(roomId);
-      if (room.gameType === "quem-sou-eu") {
-        qseEmitWritingStatus(roomId);
-      }
+      if (room.gameType === "quem-sou-eu") qseEmitWritingStatus(roomId);
 
       if (Object.keys(room.players).length === 0) {
         scheduleEmptyRoomDeletion(roomId);
