@@ -2,7 +2,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 
-// ✅ Dados do Infiltrado (novo arquivo)
+// ✅ Dados do Infiltrado
 const INFILTRADO_DATA = require("./data/infiltradoData");
 
 const app = express();
@@ -32,7 +32,7 @@ const rooms = {};
 //
 //   qse: {...}         // quem-sou-eu
 //   spy: {...}         // espião (impostor.html)
-//   infiltrado: {...}  // infiltrado (novo)
+//   infiltrado: {...}  // infiltrado
 // }
 
 function generateRoomId() {
@@ -112,6 +112,10 @@ function closeRoom(roomId) {
   delete rooms[roomId];
 }
 
+function getCallerToken(room, socketId) {
+  return Object.keys(room.players).find((t) => room.players[t].socketId === socketId) || null;
+}
+
 function schedulePlayerRemoval(roomId, token) {
   const room = rooms[roomId];
   if (!room) return;
@@ -152,14 +156,12 @@ function schedulePlayerRemoval(roomId, token) {
     if (r.infiltrado) {
       r.infiltrado.active.delete(token);
       delete r.infiltrado.votesByVoter[token];
-      // se o infiltrado caiu e foi removido, a rodada continua (fica engraçado mesmo)
-      // se quiser forçar reiniciar a rodada quando infiltrado sair, me fala.
     }
 
     if (r.masterToken === token) {
       const remaining = Object.keys(r.players);
       if (remaining.length) {
-        const onlineFirst = remaining.find(t => r.players[t].online) || remaining[0];
+        const onlineFirst = remaining.find((t) => r.players[t].online) || remaining[0];
         r.masterToken = onlineFirst;
         const sid = r.players[onlineFirst].socketId;
         if (sid) io.to(sid).emit("master");
@@ -232,7 +234,7 @@ function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
   if (room.masterToken === token) {
     const remaining = Object.keys(room.players);
     if (remaining.length) {
-      const onlineFirst = remaining.find(t => room.players[t].online) || remaining[0];
+      const onlineFirst = remaining.find((t) => room.players[t].online) || remaining[0];
       room.masterToken = onlineFirst;
       const sid = room.players[onlineFirst].socketId;
       if (sid) io.to(sid).emit("master");
@@ -251,7 +253,7 @@ function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
   }
 }
 
-/* ------------------ QUEM SOU EU (mantido) ------------------ */
+/* ------------------ QUEM SOU EU ------------------ */
 
 function ensureQse(room) {
   if (!room.qse) {
@@ -309,7 +311,10 @@ function derangement(ids) {
     const perm = [...ids].sort(() => Math.random() - 0.5);
     let ok = true;
     for (let i = 0; i < n; i++) {
-      if (perm[i] === ids[i]) { ok = false; break; }
+      if (perm[i] === ids[i]) {
+        ok = false;
+        break;
+      }
     }
     if (ok) {
       const map = {};
@@ -354,9 +359,8 @@ function emitQseOthersCharacters(roomId) {
   });
 }
 
-/* ------------------ ESPIÃO (impostor.html) ------------------ */
+/* ------------------ ESPIÃO ------------------ */
 
-// 50 pares (principal + paralela)
 const SPY_QUESTION_PAIRS = [
   { principal: "Marcas de carros de luxo mais bonitos", paralela: "Carros caros que mais chamam atenção" },
   { principal: "Carros esportivos famosos", paralela: "Carros rápidos que você conhece" },
@@ -420,10 +424,10 @@ function ensureSpy(room) {
       principal: null,
       paralela: null,
       spyToken: null,
-      answersByToken: {},     // token -> string
-      votesByVoter: {},       // voterToken -> targetToken
+      answersByToken: {},
+      votesByVoter: {},
       revealed: false,
-      lastAnswersPublic: null // array {name, token, answer}
+      lastAnswersPublic: null,
     };
   }
 }
@@ -446,7 +450,7 @@ function emitSpyState(roomId) {
   if (!room) return;
   ensureSpy(room);
 
-  const players = Object.keys(room.players).map(token => ({
+  const players = Object.keys(room.players).map((token) => ({
     token,
     name: room.players[token].name,
     online: !!room.players[token].online,
@@ -464,7 +468,7 @@ function emitSpyState(roomId) {
 }
 
 function countVotes(room) {
-  const tally = {}; // targetToken -> count
+  const tally = {};
   for (const voter in room.spy.votesByVoter) {
     const target = room.spy.votesByVoter[voter];
     if (!target) continue;
@@ -477,7 +481,7 @@ function countVotes(room) {
 
 function topVoteResult(room) {
   const tally = countVotes(room);
-  const entries = Object.keys(tally).map(t => ({ token: t, count: tally[t] }));
+  const entries = Object.keys(tally).map((t) => ({ token: t, count: tally[t] }));
   if (entries.length === 0) return { ok: false, reason: "Ninguém votou ainda." };
 
   entries.sort((a, b) => b.count - a.count);
@@ -492,11 +496,7 @@ function topVoteResult(room) {
   return { ok: true, topToken: top.token, topCount: top.count, tally };
 }
 
-function getCallerToken(room, socketId) {
-  return Object.keys(room.players).find(t => room.players[t].socketId === socketId) || null;
-}
-
-/* ------------------ INFILTRADO (NOVO) ------------------ */
+/* ------------------ INFILTRADO ------------------ */
 
 function ensureInfiltrado(room) {
   if (!room.infiltrado) {
@@ -504,22 +504,22 @@ function ensureInfiltrado(room) {
       phase: "lobby", // lobby | round1 | round2 | round3 | voting | revealed
       active: new Set(),
 
-      // escolha do jogo (privado)
       themeKey: null,
       themeName: null,
       concept: null,
       infiltradoHint: null,
       infiltradoToken: null,
 
-      // 3 perguntas selecionadas
       questions: [],
       currentRound: 0,
 
-      // ordem por rodada (para falar na call)
-      orderByRound: {}, // 1/2/3 -> array tokens
+      orderByRound: {},
 
-      // votos
-      votesByVoter: {}, // voterToken -> targetToken
+      votesByVoter: {},
+
+      // ✅ novos flags para controle (não são obrigatórios, mas ajudam)
+      revealedInfiltrator: false,
+      revealedConcepts: false,
     };
   }
 }
@@ -537,6 +537,8 @@ function infiltradoReset(room) {
   room.infiltrado.currentRound = 0;
   room.infiltrado.orderByRound = {};
   room.infiltrado.votesByVoter = {};
+  room.infiltrado.revealedInfiltrator = false;
+  room.infiltrado.revealedConcepts = false;
 }
 
 function shuffle(arr) {
@@ -561,27 +563,31 @@ function emitInfiltradoState(roomId) {
   if (!room) return;
   ensureInfiltrado(room);
 
-  const players = Object.keys(room.players).map(token => ({
+  const players = Object.keys(room.players).map((token) => ({
     token,
     name: room.players[token].name,
     online: !!room.players[token].online,
     isActive: room.infiltrado.active.has(token),
   }));
 
-  // votos (público só mostra "quem votou em quem" para UI pintar botão)
   io.to(roomId).emit("infiltradoState", {
     phase: room.infiltrado.phase,
-    themeName: room.infiltrado.themeName, // mostrar o tema é ok
+    themeName: room.infiltrado.themeName, // tema pode mostrar
     players,
     votesByVoter: room.infiltrado.votesByVoter,
     currentRound: room.infiltrado.currentRound,
-    currentQuestion: room.infiltrado.currentRound > 0 ? room.infiltrado.questions[room.infiltrado.currentRound - 1] : null,
+    currentQuestion:
+      room.infiltrado.currentRound > 0
+        ? room.infiltrado.questions[room.infiltrado.currentRound - 1]
+        : null,
     orderNames:
       room.infiltrado.currentRound > 0
         ? (room.infiltrado.orderByRound[room.infiltrado.currentRound] || [])
-            .map(t => room.players[t]?.name)
+            .map((t) => room.players[t]?.name)
             .filter(Boolean)
         : [],
+    revealedInfiltrator: !!room.infiltrado.revealedInfiltrator,
+    revealedConcepts: !!room.infiltrado.revealedConcepts,
   });
 }
 
@@ -599,7 +605,7 @@ function countVotesInfiltrado(room) {
 
 function topVoteResultInfiltrado(room) {
   const tally = countVotesInfiltrado(room);
-  const entries = Object.keys(tally).map(t => ({ token: t, count: tally[t] }));
+  const entries = Object.keys(tally).map((t) => ({ token: t, count: tally[t] }));
   if (entries.length === 0) return { ok: false, reason: "Ninguém votou ainda." };
 
   entries.sort((a, b) => b.count - a.count);
@@ -616,17 +622,19 @@ function topVoteResultInfiltrado(room) {
 
 function startInfiltradoRound(roomId) {
   const room = rooms[roomId];
-  if (!room) return;
+  if (!room) return { ok: false, error: "Sala não existe." };
   ensureInfiltrado(room);
-  infiltradoReset(room);
 
-  const tokens = Object.keys(room.players).filter(t => room.players[t].online);
+  const tokens = Object.keys(room.players).filter((t) => room.players[t].online);
   if (tokens.length < 2) {
     return { ok: false, error: "Precisa de pelo menos 2 jogadores online para iniciar." };
   }
 
-  // escolhe tema
-  const themeKeys = Object.keys(INFILTRADO_DATA.themes);
+  const themeKeys = Object.keys(INFILTRADO_DATA.themes || {});
+  if (!themeKeys.length) {
+    return { ok: false, error: "Sem dados de temas do infiltrado (infiltradoData)." };
+  }
+
   const themeKey = pickOne(themeKeys);
   const theme = INFILTRADO_DATA.themes[themeKey];
 
@@ -646,14 +654,16 @@ function startInfiltradoRound(roomId) {
   room.infiltrado.questions = questions;
   room.infiltrado.currentRound = 1;
   room.infiltrado.votesByVoter = {};
+  room.infiltrado.revealedInfiltrator = false;
+  room.infiltrado.revealedConcepts = false;
 
-  // ordem rodada 1 (aleatória)
   room.infiltrado.orderByRound[1] = shuffle(tokens);
 
-  // manda segredo individual
+  // segredo individual
   tokens.forEach((t) => {
     const sid = room.players[t]?.socketId;
     if (!sid) return;
+
     if (t === infiltradoToken) {
       io.to(sid).emit("infiltradoSecret", {
         role: "infiltrado",
@@ -669,11 +679,10 @@ function startInfiltradoRound(roomId) {
     }
   });
 
-  // manda rodada atual
   io.to(roomId).emit("infiltradoRound", {
     round: 1,
     question: room.infiltrado.questions[0],
-    order: room.infiltrado.orderByRound[1].map(t => room.players[t]?.name).filter(Boolean),
+    order: room.infiltrado.orderByRound[1].map((t) => room.players[t]?.name).filter(Boolean),
   });
 
   emitInfiltradoState(roomId);
@@ -689,8 +698,7 @@ function goNextInfiltradoRound(roomId) {
   if (!["round1", "round2", "round3"].includes(room.infiltrado.phase)) return;
 
   const next = room.infiltrado.currentRound + 1;
-
-  const tokens = Array.from(room.infiltrado.active).filter(t => room.players[t]?.online);
+  const tokens = Array.from(room.infiltrado.active).filter((t) => room.players[t]?.online);
 
   if (tokens.length < 2) {
     room.infiltrado.phase = "lobby";
@@ -715,7 +723,7 @@ function goNextInfiltradoRound(roomId) {
   io.to(roomId).emit("infiltradoRound", {
     round: next,
     question: room.infiltrado.questions[next - 1],
-    order: room.infiltrado.orderByRound[next].map(t => room.players[t]?.name).filter(Boolean),
+    order: room.infiltrado.orderByRound[next].map((t) => room.players[t]?.name).filter(Boolean),
   });
 
   emitInfiltradoState(roomId);
@@ -766,7 +774,7 @@ io.on("connection", (socket) => {
       emptyTimer: null,
       qse: null,
       spy: null,
-      infiltrado: null, // ✅ novo
+      infiltrado: null,
     };
 
     rooms[roomId].players[playerToken] = {
@@ -870,8 +878,8 @@ io.on("connection", (socket) => {
       if (room.qse.phase === "playing" && room.qse.active.has(playerToken)) {
         const activeTokens = Array.from(room.qse.active);
         const list = activeTokens
-          .filter(t => t !== playerToken)
-          .map(t => ({
+          .filter((t) => t !== playerToken)
+          .map((t) => ({
             token: t,
             name: room.players[t]?.name || "Jogador",
             character: room.qse.characterByTarget[t],
@@ -889,7 +897,7 @@ io.on("connection", (socket) => {
       emitSpyState(roomId);
 
       if (room.spy.phase === "answering" && room.spy.active.has(playerToken)) {
-        const question = (playerToken === room.spy.spyToken) ? room.spy.paralela : room.spy.principal;
+        const question = playerToken === room.spy.spyToken ? room.spy.paralela : room.spy.principal;
         io.to(socket.id).emit("spyQuestion", { question });
       }
     }
@@ -898,9 +906,9 @@ io.on("connection", (socket) => {
       ensureInfiltrado(room);
       emitInfiltradoState(roomId);
 
-      // se o jogo já está rolando, reenvia o "segredo" pro reconectado
       if (room.infiltrado.phase !== "lobby" && room.infiltrado.active.has(playerToken)) {
         const isInf = playerToken === room.infiltrado.infiltradoToken;
+
         if (isInf) {
           io.to(socket.id).emit("infiltradoSecret", {
             role: "infiltrado",
@@ -915,12 +923,11 @@ io.on("connection", (socket) => {
           });
         }
 
-        // manda rodada atual (pra ele voltar pra tela certa)
         if (room.infiltrado.currentRound > 0) {
           const r = room.infiltrado.currentRound;
           const q = room.infiltrado.questions[r - 1] || null;
           const order = (room.infiltrado.orderByRound[r] || [])
-            .map(t => room.players[t]?.name)
+            .map((t) => room.players[t]?.name)
             .filter(Boolean);
 
           io.to(socket.id).emit("infiltradoRound", { round: r, question: q, order });
@@ -956,7 +963,7 @@ io.on("connection", (socket) => {
     if (callerToken !== room.masterToken) return;
 
     room.numbers = {};
-    const tokens = Object.keys(room.players).filter(t => room.players[t].online);
+    const tokens = Object.keys(room.players).filter((t) => room.players[t].online);
     const pool = Array.from({ length: 100 }, (_, i) => i + 1).sort(() => Math.random() - 0.5);
 
     tokens.forEach((token, index) => {
@@ -997,7 +1004,7 @@ io.on("connection", (socket) => {
     ensureQse(room);
     qseResetRound(room);
 
-    const tokens = Object.keys(room.players).filter(t => room.players[t].online);
+    const tokens = Object.keys(room.players).filter((t) => room.players[t].online);
     if (tokens.length < 2) {
       socket.emit("errorMessage", "Precisa de pelo menos 2 jogadores online para iniciar.");
       return;
@@ -1071,7 +1078,7 @@ io.on("connection", (socket) => {
     if (room.qse.phase !== "writing") return;
 
     const allActive = Array.from(room.qse.active);
-    const survivors = allActive.filter(t => !!room.qse.submittedByWriter[t]);
+    const survivors = allActive.filter((t) => !!room.qse.submittedByWriter[t]);
 
     if (survivors.length < 2) {
       room.qse.active = new Set(survivors);
@@ -1149,7 +1156,7 @@ io.on("connection", (socket) => {
     ensureSpy(room);
     spyReset(room);
 
-    const tokens = Object.keys(room.players).filter(t => room.players[t].online);
+    const tokens = Object.keys(room.players).filter((t) => room.players[t].online);
     if (tokens.length < 2) {
       socket.emit("errorMessage", "Precisa de pelo menos 2 jogadores online para iniciar.");
       return;
@@ -1167,7 +1174,7 @@ io.on("connection", (socket) => {
     tokens.forEach((t) => {
       const sid = room.players[t]?.socketId;
       if (!sid) return;
-      const question = (t === spyToken) ? pair.paralela : pair.principal;
+      const question = t === spyToken ? pair.paralela : pair.principal;
       io.to(sid).emit("spyQuestion", { question });
     });
 
@@ -1204,7 +1211,6 @@ io.on("connection", (socket) => {
 
     room.spy.answersByToken[token] = clean;
     socket.emit("spyAnsweredOK");
-
     emitSpyState(roomId);
   });
 
@@ -1220,7 +1226,7 @@ io.on("connection", (socket) => {
     if (room.spy.phase !== "answering") return;
 
     const allActive = Array.from(room.spy.active);
-    const survivors = allActive.filter(t => !!room.spy.answersByToken[t]);
+    const survivors = allActive.filter((t) => !!room.spy.answersByToken[t]);
 
     room.spy.active = new Set(survivors);
 
@@ -1232,10 +1238,10 @@ io.on("connection", (socket) => {
       return;
     }
 
-    room.spy.lastAnswersPublic = survivors.map(t => ({
+    room.spy.lastAnswersPublic = survivors.map((t) => ({
       token: t,
       name: room.players[t]?.name || "Jogador",
-      answer: room.spy.answersByToken[t]
+      answer: room.spy.answersByToken[t],
     }));
 
     room.spy.phase = "voting";
@@ -1243,7 +1249,7 @@ io.on("connection", (socket) => {
 
     io.to(roomId).emit("spyAnswersRevealed", {
       principal: room.spy.principal,
-      answers: room.spy.lastAnswersPublic
+      answers: room.spy.lastAnswersPublic,
     });
 
     emitSpyState(roomId);
@@ -1307,13 +1313,13 @@ io.on("connection", (socket) => {
       paralela: room.spy.paralela,
       topVotedToken: res.topToken,
       topVotedName: room.players[res.topToken]?.name || "Jogador",
-      tally: res.tally
+      tally: res.tally,
     });
 
     emitSpyState(roomId);
   });
 
-  /* ------------------ INFILTRADO (NOVO) ------------------ */
+  /* ------------------ INFILTRADO ------------------ */
 
   socket.on("infiltradoStartRound", (roomId) => {
     roomId = (roomId || "").toString().trim().toUpperCase();
@@ -1327,9 +1333,7 @@ io.on("connection", (socket) => {
     infiltradoReset(room);
 
     const res = startInfiltradoRound(roomId);
-    if (!res.ok) {
-      socket.emit("errorMessage", res.error || "Não foi possível iniciar.");
-    }
+    if (!res.ok) socket.emit("errorMessage", res.error || "Não foi possível iniciar.");
   });
 
   socket.on("infiltradoNextQuestion", (roomId) => {
@@ -1356,7 +1360,6 @@ io.on("connection", (socket) => {
 
     ensureInfiltrado(room);
 
-    // voto pode acontecer em qualquer rodada (round1/2/3/voting)
     if (!["round1", "round2", "round3", "voting"].includes(room.infiltrado.phase)) {
       socket.emit("errorMessage", "A rodada ainda não começou.");
       return;
@@ -1376,73 +1379,66 @@ io.on("connection", (socket) => {
     emitInfiltradoState(roomId);
   });
 
+  // ✅ BOTÃO 1: Revela só o infiltrado (não revela conceito)
   socket.on("infiltradoReveal", (roomId) => {
-  roomId = (roomId || "").toString().trim().toUpperCase();
-  const room = rooms[roomId];
-  if (!room || room.gameType !== "infiltrado") return;
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "infiltrado") return;
 
-  const callerToken = getCallerToken(room, socket.id);
-  if (!callerToken || callerToken !== room.masterToken) return;
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
 
-  ensureInfiltrado(room);
+    ensureInfiltrado(room);
 
-  // só permite revelar se a rodada já começou
-  if (!["round1", "round2", "round3", "voting"].includes(room.infiltrado.phase)) return;
+    if (!["round1", "round2", "round3", "voting"].includes(room.infiltrado.phase)) return;
 
-  const res = topVoteResultInfiltrado(room);
-  if (!res.ok) {
-    io.to(roomId).emit("infiltradoNeedResolve", res.reason);
-    return;
-  }
+    const res = topVoteResultInfiltrado(room);
+    if (!res.ok) {
+      io.to(roomId).emit("infiltradoNeedResolve", res.reason);
+      return;
+    }
 
-  // marca estado como "revelado" mas sem revelar conceitos ainda
-  room.infiltrado.phase = "revealed";
-  room.infiltrado.revealedInfiltrator = true;
-  room.infiltrado.revealedConcepts = false;
+    room.infiltrado.phase = "revealed";
+    room.infiltrado.revealedInfiltrator = true;
+    room.infiltrado.revealedConcepts = false;
 
-  const infToken = room.infiltrado.infiltradoToken;
-  const infName = room.players[infToken]?.name || "(desconectado)";
+    const infToken = room.infiltrado.infiltradoToken;
+    const infName = room.players[infToken]?.name || "(desconectado)";
 
-  // ✅ envia SÓ quem é + resultado de votos
-  io.to(roomId).emit("infiltradoInfiltratorRevealed", {
-    infiltradoToken: infToken,
-    infiltradoName: infName,
-    topVotedToken: res.topToken,
-    topVotedName: room.players[res.topToken]?.name || "Jogador",
-    tally: res.tally
+    io.to(roomId).emit("infiltradoInfiltratorRevealed", {
+      infiltradoToken: infToken,
+      infiltradoName: infName,
+      topVotedToken: res.topToken,
+      topVotedName: room.players[res.topToken]?.name || "Jogador",
+      tally: res.tally,
+    });
+
+    emitInfiltradoState(roomId);
   });
 
-  emitInfiltradoState(roomId);
-});
+  // ✅ BOTÃO 2: Revela tema/conceito/pista (depois)
+  socket.on("infiltradoRevealConcepts", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "infiltrado") return;
 
-socket.on("infiltradoRevealConcepts", (roomId) => {
-  roomId = (roomId || "").toString().trim().toUpperCase();
-  const room = rooms[roomId];
-  if (!room || room.gameType !== "infiltrado") return;
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
 
-  const callerToken = getCallerToken(room, socket.id);
-  if (!callerToken || callerToken !== room.masterToken) return;
+    ensureInfiltrado(room);
 
-  ensureInfiltrado(room);
+    if (room.infiltrado.phase !== "revealed") {
+      socket.emit("errorMessage", "Revele o infiltrado primeiro.");
+      return;
+    }
 
-  // Só faz sentido depois do infiltrado já ter sido revelado
-  if (room.infiltrado.phase !== "revealed") {
-    socket.emit("errorMessage", "Revele o infiltrado primeiro.");
-    return;
-  }
+    room.infiltrado.revealedConcepts = true;
 
-  room.infiltrado.revealedConcepts = true;
-
-  // ✅ agora sim revela o tema + conceito + pista
-  io.to(roomId).emit("infiltradoConceptsRevealed", {
-    themeName: room.infiltrado.themeName,
-    concept: room.infiltrado.concept,
-    infiltradoHint: room.infiltrado.infiltradoHint
-  });
-
-  emitInfiltradoState(roomId);
-});
-
+    io.to(roomId).emit("infiltradoConceptsRevealed", {
+      themeName: room.infiltrado.themeName,
+      concept: room.infiltrado.concept,
+      infiltradoHint: room.infiltrado.infiltradoHint,
+    });
 
     emitInfiltradoState(roomId);
   });
@@ -1523,4 +1519,3 @@ socket.on("infiltradoRevealConcepts", (roomId) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-
