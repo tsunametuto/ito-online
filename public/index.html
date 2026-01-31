@@ -5,147 +5,79 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>TBR</title>
   <style>
-    :root{
-      --bg:#050505;
-      --accent:#5b0a63;
-      --accent2:#6d0d77;
-      --text:#ffffff;
-      --muted:#b9b9b9;
-      --border:#1f1f1f;
+    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
+    .wrap{max-width:640px;margin:0 auto}
+    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0}
+    .row{display:flex;gap:12px}
+    .row>*{flex:1}
+    input,select,button{
+      width:100%;box-sizing:border-box;padding:14px;border-radius:10px;
+      border:1px solid #333;background:#1f1f1f;color:#fff;font-size:16px
     }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      font-family: Arial, sans-serif;
-      background:var(--bg);
-      color:var(--text);
-      display:flex;
-      min-height:100vh;
-      align-items:center;
-      justify-content:center;
-      padding:22px;
-    }
-    .wrap{width:min(720px, 100%);}
-    h1{
-      text-align:center;
-      font-size:64px;
-      margin:0 0 18px 0;
-      letter-spacing:2px;
-    }
-    .row{display:flex; gap:14px;}
-    .row > *{flex:1}
-    .field, .btn, select{
-      width:100%;
-      padding:18px 16px;
-      border-radius:12px;
-      border:1px solid var(--border);
-      background:var(--accent);
-      color:var(--text);
-      font-weight:700;
-      font-size:22px;
-      text-transform:uppercase;
-      outline:none;
-    }
-    .field::placeholder{color:#f1dff3; opacity:.75}
-    select{appearance:none;}
-    .btn{cursor:pointer; transition:.15s;}
-    .btn:hover{background:var(--accent2)}
-    .btn.secondary{
-      background:transparent;
-      border:1px solid #2a2a2a;
-      color:var(--muted);
-      font-weight:600;
-      text-transform:none;
-      font-size:16px;
-      padding:12px 14px;
-      border-radius:10px;
-    }
-    .hint{
-      text-align:center;
-      color:var(--muted);
-      margin-top:10px;
-      font-size:14px;
-      line-height:1.35;
-    }
-    .codeBox{
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      gap:12px;
-      padding:18px 16px;
-      border-radius:12px;
-      border:1px solid var(--border);
-      background:var(--accent);
-      font-weight:900;
-      font-size:30px;
-      letter-spacing:4px;
-      user-select:text;
-    }
-    .topActions{display:flex; justify-content:flex-start; margin:0 0 12px 0;}
-    .hidden{display:none !important;}
-    .small{font-size:14px; color:var(--muted); text-align:center; margin-top:8px;}
+    button{cursor:pointer}
+    button:hover{background:#2a2a2a}
+    .muted{color:#aaa;font-size:13px;line-height:1.4}
+    .hidden{display:none !important}
+    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;font-weight:800}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>TBR</h1>
+    <h1 style="margin:10px 0 0 0;">TBR</h1>
+    <div class="muted">Plataforma de jogos (versão inicial)</div>
 
-    <!-- ETAPA 1 -->
-    <div id="step1">
-      <select id="gameSelect" class="field">
-        <option value="ito">JOGO</option>
-        <option value="quem-sou-eu">QUEM SOU EU?</option>
-        <option value="impostor">IMPOSTOR</option>
+    <!-- Etapa 1 -->
+    <div class="card" id="step1">
+      <select id="gameSelect">
+        <option value="ito">ITO (números)</option>
+        <option value="quem-sou-eu">Quem sou eu? (em breve)</option>
+        <option value="impostor">Impostor (em breve)</option>
       </select>
 
-      <input id="nickname" class="field" placeholder="APELIDO" maxlength="20" />
+      <input id="nickname" placeholder="Seu apelido" maxlength="20" />
 
-      <div class="row">
-        <button class="btn" id="btnGoCreate">CRIAR</button>
-        <button class="btn" id="btnGoJoin">ENTRAR</button>
+      <div class="row" style="margin-top:10px;">
+        <button id="btnGoCreate">Criar sala</button>
+        <button id="btnGoJoin">Entrar na sala</button>
       </div>
 
-      <div class="hint">
-        Você escolhe o jogo e seu apelido.<br/>
-        Depois decide se vai <b>criar</b> ou <b>entrar</b> em uma sala.
-      </div>
-    </div>
-
-    <!-- ETAPA 2 (MESTRE) -->
-    <div id="step2" class="hidden">
-      <div class="topActions">
-        <button class="btn secondary" id="back2">← Voltar</button>
-      </div>
-
-      <div class="codeBox">
-        <span id="generatedCode">------</span>
-        <button class="btn secondary" id="copyCode">Copiar</button>
-      </div>
-
-      <input id="masterPassword" class="field" placeholder="SENHA" maxlength="24" />
-      <button class="btn" id="btnCreateRoomFinal">CRIAR</button>
-
-      <div class="small">
-        Compartilhe o <b>código</b> + a <b>senha</b> com os jogadores.
+      <div class="muted" style="margin-top:10px;">
+        Você escolhe o jogo, coloca seu apelido e cria ou entra em uma sala.
       </div>
     </div>
 
-    <!-- ETAPA 3 (JOGADOR) -->
-    <div id="step3" class="hidden">
-      <div class="topActions">
-        <button class="btn secondary" id="back3">← Voltar</button>
+    <!-- Etapa 2 (mestre) -->
+    <div class="card hidden" id="step2">
+      <button id="back2">← Voltar</button>
+
+      <div style="margin:10px 0;">
+        Código da sala: <span class="code" id="generatedCode">------</span>
       </div>
 
       <div class="row">
-        <input id="joinCode" class="field" placeholder="CÓDIGO" maxlength="6" />
-        <input id="joinPassword" class="field" placeholder="SENHA" maxlength="24" />
+        <button id="copyCode">Copiar código</button>
+        <button id="regenCode">Gerar outro</button>
       </div>
 
-      <button class="btn" id="btnJoinRoomFinal">ENTRAR</button>
+      <input id="masterPassword" placeholder="Senha da sala" maxlength="24" style="margin-top:10px;"/>
 
-      <div class="small">
-        Digite o código e a senha que o mestre te enviou.
+      <button id="btnCreateRoomFinal" style="margin-top:10px;">Criar</button>
+
+      <div class="muted" style="margin-top:10px;">
+        Envie <b>código</b> + <b>senha</b> pros jogadores.
       </div>
+    </div>
+
+    <!-- Etapa 3 (jogador) -->
+    <div class="card hidden" id="step3">
+      <button id="back3">← Voltar</button>
+
+      <div class="row" style="margin-top:10px;">
+        <input id="joinCode" placeholder="Código" maxlength="6" />
+        <input id="joinPassword" placeholder="Senha" maxlength="24" />
+      </div>
+
+      <button id="btnJoinRoomFinal" style="margin-top:10px;">Entrar</button>
     </div>
   </div>
 
@@ -157,11 +89,15 @@
     let nickname = "";
     let pendingRoomCode = "";
 
-    function show(step){
-      document.getElementById("step1").classList.add("hidden");
-      document.getElementById("step2").classList.add("hidden");
-      document.getElementById("step3").classList.add("hidden");
-      document.getElementById(step).classList.remove("hidden");
+    const step1 = document.getElementById("step1");
+    const step2 = document.getElementById("step2");
+    const step3 = document.getElementById("step3");
+
+    function showStep(n){
+      step1.classList.add("hidden");
+      step2.classList.add("hidden");
+      step3.classList.add("hidden");
+      document.getElementById("step"+n).classList.remove("hidden");
     }
 
     function generateCode(){
@@ -181,46 +117,47 @@
       selectedGame = gameSelect.value;
       nickname = nickInput.value.trim();
       if (!nickname) return alert("Coloque um apelido.");
-
       localStorage.setItem("tbr_nick", nickname);
 
       pendingRoomCode = generateCode();
       document.getElementById("generatedCode").textContent = pendingRoomCode;
-
       document.getElementById("masterPassword").value = "";
-      show("step2");
+      showStep(2);
     };
 
     document.getElementById("btnGoJoin").onclick = () => {
       selectedGame = gameSelect.value;
       nickname = nickInput.value.trim();
       if (!nickname) return alert("Coloque um apelido.");
-
       localStorage.setItem("tbr_nick", nickname);
 
       document.getElementById("joinCode").value = "";
       document.getElementById("joinPassword").value = "";
-      show("step3");
+      showStep(3);
     };
 
-    document.getElementById("back2").onclick = () => show("step1");
-    document.getElementById("back3").onclick = () => show("step1");
+    document.getElementById("back2").onclick = () => showStep(1);
+    document.getElementById("back3").onclick = () => showStep(1);
+
+    document.getElementById("regenCode").onclick = () => {
+      pendingRoomCode = generateCode();
+      document.getElementById("generatedCode").textContent = pendingRoomCode;
+    };
 
     document.getElementById("copyCode").onclick = async () => {
       try{
         await navigator.clipboard.writeText(pendingRoomCode);
         alert("Código copiado!");
       }catch(e){
-        alert("Não deu pra copiar automaticamente. Copie manualmente: " + pendingRoomCode);
+        alert("Copie manualmente: " + pendingRoomCode);
       }
     };
 
-    // Etapa 2 -> criar sala
     document.getElementById("btnCreateRoomFinal").onclick = () => {
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
 
-      // 👑 salva senha só no navegador do mestre, só pra não pedir de novo no jogo
+      // salva só pro mestre não digitar duas vezes no ITO
       sessionStorage.setItem("tbr_master_password", password);
       sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
@@ -232,7 +169,6 @@
       });
     };
 
-    // Etapa 3 -> entrar na sala
     document.getElementById("btnJoinRoomFinal").onclick = () => {
       const roomId = document.getElementById("joinCode").value.trim().toUpperCase();
       const password = document.getElementById("joinPassword").value.trim();
@@ -249,15 +185,14 @@
 
     socket.on("errorMessage", (msg) => alert(msg));
 
-    // ✅ redireciona para a página do jogo
     socket.on("roomCreated", ({ roomId, gameType }) => {
-      const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
-      window.location.href = url;
+      window.location.href =
+        `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
     });
 
     socket.on("joinedRoom", ({ roomId, gameType }) => {
-      const url = `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
-      window.location.href = url;
+      window.location.href =
+        `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
     });
   </script>
 </body>
