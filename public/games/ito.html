@@ -35,10 +35,10 @@
     </div>
 
     <!-- senha (só aparece se precisar) -->
-    <div class="card" id="passwordCard">
+    <div class="card" id="passwordCard" style="display:none;">
       <input id="passwordInput" placeholder="Senha da sala" />
       <button id="btnEnter">Entrar</button>
-      <div class="muted" style="margin-top:8px;">Jogadores digitam a senha aqui.</div>
+      <div class="muted" style="margin-top:8px;">Se você abriu o link direto, digite a senha aqui.</div>
     </div>
 
     <div class="card" id="gameCard" style="display:none;">
@@ -73,15 +73,15 @@
     let isMaster = false;
 
     function showGame() {
-      document.getElementById("passwordCard").style.display = "none";
       document.getElementById("gameCard").style.display = "block";
+      document.getElementById("passwordCard").style.display = "none";
     }
 
     function joinRoomWith(password) {
       socket.emit("joinRoom", { roomId, password, playerName: name });
     }
 
-    // Jogador entra manualmente
+    // fallback (se abriu link direto)
     document.getElementById("btnEnter").onclick = () => {
       const password = document.getElementById("passwordInput").value.trim();
       if (!roomId) return alert("Código da sala ausente.");
@@ -90,16 +90,26 @@
       joinRoomWith(password);
     };
 
-    // Mestre entra automático (sem digitar senha de novo)
-    (function autoJoinMaster() {
-      const savedPass = sessionStorage.getItem("tbr_master_password");
-      const savedRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
+    // ✅ Auto-join: tenta mestre, depois tenta jogador
+    (function autoJoin() {
+      const masterPass = sessionStorage.getItem("tbr_master_password");
+      const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
 
-      if (savedPass && savedRoom === roomId) {
-        // tenta entrar direto
-        document.getElementById("passwordCard").style.display = "none";
-        joinRoomWith(savedPass);
+      if (masterPass && masterRoom === roomId) {
+        joinRoomWith(masterPass);
+        return;
       }
+
+      const joinPass = sessionStorage.getItem("tbr_join_password");
+      const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
+
+      if (joinPass && joinRoom === roomId) {
+        joinRoomWith(joinPass);
+        return;
+      }
+
+      // não tem senha salva -> mostra input
+      document.getElementById("passwordCard").style.display = "block";
     })();
 
     document.getElementById("btnDistribute").onclick = () => {
@@ -115,18 +125,26 @@
       socket.emit("leaveRoom", roomId);
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
       window.location.href = "/";
     };
 
     socket.on("errorMessage", (msg) => {
       alert(msg);
-      // se o autoJoin falhar, mostra a senha
+      // se autoJoin falhar, mostra senha
       document.getElementById("passwordCard").style.display = "block";
     });
 
     socket.on("joinedRoom", () => {
       showGame();
       document.getElementById("roleText").textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
+
+      // ✅ apaga senha do navegador assim que entrou
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
     });
 
     socket.on("master", () => {
@@ -164,6 +182,8 @@
       alert("O mestre saiu. A sala foi fechada.");
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
       window.location.href = "/";
     });
   </script>
