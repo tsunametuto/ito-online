@@ -16,6 +16,7 @@
     }
     button{cursor:pointer}
     button:hover{background:#2a2a2a}
+    button:disabled{opacity:.5;cursor:not-allowed}
     .muted{color:#aaa;font-size:13px;line-height:1.4}
     .pill{display:inline-block;padding:2px 8px;border:1px solid #333;border-radius:999px;font-size:12px;color:#aaa;margin-left:6px}
     .players{display:flex;flex-wrap:wrap;gap:8px}
@@ -43,6 +44,18 @@
 
     .big{font-size:20px;font-weight:900}
     .center{text-align:center}
+
+    .voteGrid{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      margin-top:10px;
+    }
+    .voteGrid button{
+      width:auto;
+      min-width:160px;
+      flex:1;
+    }
   </style>
 </head>
 <body>
@@ -74,7 +87,7 @@
       </div>
 
       <div class="muted" style="margin-top:10px" id="kickHint" hidden>
-        Clique em um jogador abaixo para expulsar (só o mestre vê isso).
+        Clique em um jogador acima para expulsar (só o mestre vê isso).
       </div>
     </div>
 
@@ -92,6 +105,18 @@
       <div class="muted center" id="orderBox" style="margin-top:10px;">—</div>
     </div>
 
+    <!-- ✅ VOTAÇÃO -->
+    <div class="card" id="voteCard" hidden>
+      <div class="title">Votação</div>
+      <div class="muted">
+        Vote em quem você acha que é o infiltrado. Você pode votar em você e trocar o voto.
+      </div>
+
+      <div class="voteGrid" id="voteGrid"></div>
+
+      <div class="muted" style="margin-top:10px" id="voteStatus">—</div>
+    </div>
+
     <div class="card" id="revealBox" hidden>
       <div class="title">Revelação</div>
       <div class="big" id="revealLine1">—</div>
@@ -106,30 +131,20 @@
   <script>
     const socket = io();
 
-    function setPressed(btn, type = "normal") {
-      if (!btn) return;
-      document.querySelectorAll("#masterControls button, #btnLeave").forEach(b => {
-        b.classList.remove("pressed", "good-pressed", "bad-pressed");
-      });
-      if (type === "good") btn.classList.add("good-pressed");
-      else if (type === "bad") btn.classList.add("bad-pressed");
-      else btn.classList.add("pressed");
-    }
-
     function qs(name){
       const u = new URL(location.href);
       return u.searchParams.get(name) || "";
     }
 
     const roomId = qs("room").toUpperCase();
-    const nickname = qs("name");
+    const nickname = qs("name") || "";
     const playerToken = qs("token") || localStorage.getItem("tbr_player_token") || "";
     const sessionKey = qs("sessionKey") || sessionStorage.getItem(`tbr_session_${roomId}`) || "";
 
     document.getElementById("roomCode").textContent = roomId || "------";
     document.getElementById("subtitle").textContent = nickname ? `Você: ${nickname}` : "—";
 
-    // tenta reconectar/entrar na sala sem pedir senha de novo (sessionKey)
+    // tenta entrar sem senha (sessionKey)
     socket.emit("joinRoom", {
       roomId,
       password: "",
@@ -138,19 +153,57 @@
       sessionKey
     });
 
+    // UI refs
+    const rolePill = document.getElementById("rolePill");
+    const masterControls = document.getElementById("masterControls");
+    const kickHint = document.getElementById("kickHint");
+
+    const btnStart = document.getElementById("btnStart");
+    const btnNextQ = document.getElementById("btnNextQ");
+    const btnRevealInfil = document.getElementById("btnRevealInfil");
+    const btnRevealConcepts = document.getElementById("btnRevealConcepts");
+    const btnLeave = document.getElementById("btnLeave");
+
+    const voteCard = document.getElementById("voteCard");
+    const voteGrid = document.getElementById("voteGrid");
+    const voteStatus = document.getElementById("voteStatus");
+
     let isMaster = false;
-    let playersCache = [];
+    let lastPlayers = [];
+    let lastMasterToken = null;
+    let lastState = null; // infiltradoState
+
+    function clearPressedInMasterRow(){
+      document.querySelectorAll("#masterControls button, #btnLeave").forEach(b => {
+        b.classList.remove("pressed","good-pressed","bad-pressed");
+      });
+    }
+
+    function setPressed(btn, type = "normal") {
+      if (!btn) return;
+      clearPressedInMasterRow();
+      if (type === "good") btn.classList.add("good-pressed");
+      else if (type === "bad") btn.classList.add("bad-pressed");
+      else btn.classList.add("pressed");
+    }
+
+    function updateMasterVisibility(){
+      masterControls.hidden = !isMaster;
+      kickHint.hidden = !isMaster;
+      rolePill.textContent = isMaster ? "mestre 👑" : "jogador";
+    }
 
     function renderPlayers(list){
       const wrap = document.getElementById("players");
       wrap.innerHTML = "";
-      playersCache = list;
+      lastPlayers = list;
 
       list.forEach(p => {
         const el = document.createElement("div");
         el.className = "p" + (p.isMaster ? " master":"") + (p.online ? "" : " off");
         el.textContent = p.name + (p.isMaster ? " 👑" : "") + (p.online ? "" : " (off)");
 
+        // expulsar (apenas mestre)
         if (isMaster && !p.isMaster) {
           el.style.cursor = "pointer";
           el.title = "Clique para expulsar";
@@ -165,13 +218,65 @@
       });
     }
 
-    // Botões
-    const btnStart = document.getElementById("btnStart");
-    const btnNextQ = document.getElementById("btnNextQ");
-    const btnRevealInfil = document.getElementById("btnRevealInfil");
-    const btnRevealConcepts = document.getElementById("btnRevealConcepts");
-    const btnLeave = document.getElementById("btnLeave");
+    function phaseAllowsVoting(phase){
+      return ["round1","round2","round3","voting"].includes(phase);
+    }
 
+    function renderVoteUI(){
+      if (!lastState) return;
+
+      const phase = lastState.phase;
+      const players = lastState.players || [];
+      const votesByVoter = lastState.votesByVoter || {};
+
+      // mostra card só quando a rodada começou (não no lobby)
+      const show = phaseAllowsVoting(phase);
+      voteCard.hidden = !show;
+      if (!show) return;
+
+      const activePlayers = players.filter(p => p.isActive && p.online);
+      const myVote = votesByVoter[playerToken] || null;
+
+      voteGrid.innerHTML = "";
+
+      activePlayers.forEach(p => {
+        const b = document.createElement("button");
+        b.textContent = p.name;
+        b.onclick = () => {
+          socket.emit("infiltradoVote", { roomId, targetToken: p.token });
+        };
+
+        // destaque do voto
+        if (myVote && myVote === p.token) b.classList.add("bad-pressed");
+
+        voteGrid.appendChild(b);
+      });
+
+      const myVoteName =
+        myVote ? (activePlayers.find(x => x.token === myVote)?.name || "—") : "—";
+
+      voteStatus.textContent =
+        `Seu voto: ${myVoteName} • Você pode trocar quando quiser.`;
+    }
+
+    function updateMasterButtonsEnabled(){
+      // só o mestre vê os botões, mas ainda assim:
+      if (!isMaster || !lastState) return;
+
+      const phase = lastState.phase;
+
+      btnStart.disabled = phase !== "lobby";
+      btnNextQ.disabled = !["round1","round2","round3"].includes(phase);
+
+      // pode revelar infiltrado a partir do round1 em diante
+      btnRevealInfil.disabled = !phaseAllowsVoting(phase);
+
+      // revelar respostas só depois de "revealed" (ou seja: depois de revelar infiltrado)
+      // seu server bloqueia isso com phase !== "revealed"
+      btnRevealConcepts.disabled = (phase !== "revealed");
+    }
+
+    // Botões (mestre)
     btnStart.onclick = () => {
       setPressed(btnStart);
       socket.emit("infiltradoStartRound", roomId);
@@ -182,18 +287,17 @@
       socket.emit("infiltradoNextQuestion", roomId);
     };
 
-    // botão 1: revela apenas o infiltrado (sem conceito)
     btnRevealInfil.onclick = () => {
       setPressed(btnRevealInfil, "bad");
       socket.emit("infiltradoReveal", roomId);
     };
 
-    // botão 2: revela tema/conceito/pista depois
     btnRevealConcepts.onclick = () => {
       setPressed(btnRevealConcepts, "good");
       socket.emit("infiltradoRevealConcepts", roomId);
     };
 
+    // Sair
     btnLeave.onclick = () => {
       setPressed(btnLeave, "bad");
       socket.emit("leaveRoom", roomId);
@@ -202,15 +306,6 @@
 
     // Eventos gerais
     socket.on("errorMessage", (m) => alert(m));
-
-    socket.on("master", () => {
-      isMaster = true;
-      document.getElementById("rolePill").textContent = "mestre 👑";
-      document.getElementById("masterControls").hidden = false;
-      document.getElementById("kickHint").hidden = false;
-
-      if (playersCache.length) renderPlayers(playersCache);
-    });
 
     socket.on("roomClosed", () => {
       alert("A sala foi fechada.");
@@ -222,17 +317,28 @@
       window.location.href = "/";
     });
 
-    socket.on("playersUpdate", ({ players, gameType }) => {
+    // ✅ Atualização de jogadores: é aqui que definimos se é mestre (sem depender do evento "master")
+    socket.on("playersUpdate", ({ players, masterToken, gameType }) => {
       if (gameType && gameType !== "infiltrado") return;
-      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
-      renderPlayers(players);
+
+      lastMasterToken = masterToken || null;
+      isMaster = !!masterToken && (masterToken === playerToken);
+
+      updateMasterVisibility();
+      renderPlayers(players || []);
+      updateMasterButtonsEnabled();
+    });
+
+    // ✅ Estado do jogo (server manda isso sempre que muda algo)
+    socket.on("infiltradoState", (state) => {
+      lastState = state;
+
+      renderVoteUI();
+      updateMasterButtonsEnabled();
     });
 
     // ✅ segredo individual (sua info)
     socket.on("infiltradoSecret", (payload) => {
-      // payload:
-      //  - { role:"infiltrado", themeName, hint }
-      //  - { role:"jogador", themeName, concept }
       const el = document.getElementById("yourInfo");
       if (!payload) { el.textContent = "—"; return; }
 
@@ -243,13 +349,13 @@
       }
     });
 
-    // ✅ rodada/pergunta atual
+    // ✅ rodada/pergunta atual + ordem
     socket.on("infiltradoRound", ({ round, question, order }) => {
       document.getElementById("questionBox").textContent = question || "—";
       const orderText = (order && order.length) ? `Ordem (rodada ${round}): ${order.join(" → ")}` : "—";
       document.getElementById("orderBox").textContent = orderText;
 
-      // quando muda de rodada, esconde a caixa de revelação (evita ficar “velha”)
+      // reseta box de revelação ao avançar rodada
       document.getElementById("revealBox").hidden = true;
       document.getElementById("revealLine1").textContent = "—";
       document.getElementById("revealLine2").textContent = "—";
@@ -268,6 +374,7 @@
       alert(msg || "Rodada cancelada.");
       document.getElementById("questionBox").textContent = "—";
       document.getElementById("orderBox").textContent = "—";
+      voteCard.hidden = true;
     });
 
     // ✅ Revelação 1: só o infiltrado (sem conceito)
@@ -275,21 +382,15 @@
       document.getElementById("revealBox").hidden = false;
       document.getElementById("revealLine1").textContent = `INFILTRADO: ${infiltradoName || "—"}`;
       document.getElementById("revealLine2").textContent =
-        `Mais votado: ${topVotedName || "—"} — (as respostas ainda não foram reveladas)`;
+        `Mais votado: ${topVotedName || "—"} — (respostas ainda não reveladas)`;
     });
 
-    // ✅ Revelação 2: agora sim tema/conceito/pista
+    // ✅ Revelação 2: tema/conceito/pista
     socket.on("infiltradoConceptsRevealed", ({ themeName, concept, infiltradoHint }) => {
       document.getElementById("revealBox").hidden = false;
       document.getElementById("revealLine1").textContent = `Tema: ${themeName || "—"}`;
-      document.getElementById("revealLine2").textContent = `Conceito: ${concept || "—"} | Pista do infiltrado: ${infiltradoHint || "—"}`;
-    });
-
-    // (opcional) estado geral — útil pra depurar e/ou ajustar UI depois
-    socket.on("infiltradoState", (state) => {
-      // Se quiser, aqui dá pra habilitar/desabilitar botões baseado em phase,
-      // mas deixei só pra manter compatível e não mexer no seu fluxo.
-      // console.log("infiltradoState", state);
+      document.getElementById("revealLine2").textContent =
+        `Conceito: ${concept || "—"} | Pista do infiltrado: ${infiltradoHint || "—"}`;
     });
   </script>
 </body>
