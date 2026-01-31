@@ -30,7 +30,7 @@
     <div class="card" id="step1">
       <select id="gameSelect">
         <option value="ito">ITO (números)</option>
-        <option value="quem-sou-eu">Quem sou eu? (em breve)</option>
+        <option value="quem-sou-eu">Quem sou eu?</option>
         <option value="impostor">Impostor (em breve)</option>
       </select>
 
@@ -158,7 +158,7 @@
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
 
-      // guarda só pra atravessar o redirecionamento (depois o ito.html apaga)
+      // só pra atravessar o redirecionamento (o jogo apaga depois)
       sessionStorage.setItem("tbr_master_password", password);
       sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
@@ -178,7 +178,7 @@
       if (!roomId) return alert("Digite o código.");
       if (!password) return alert("Digite a senha.");
 
-      // guarda só pra atravessar o redirecionamento (depois o ito.html apaga)
+      // só pra atravessar o redirecionamento (o jogo apaga depois)
       sessionStorage.setItem("tbr_join_password", password);
       sessionStorage.setItem("tbr_join_room", roomId);
 
