@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Quem sou eu?</title>
+  <title>Eu sou…</title>
   <style>
     body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
     .wrap{max-width:820px;margin:0 auto}
@@ -25,27 +25,37 @@
     .hidden{display:none !important}
     .twoCol{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     @media (max-width: 760px){ .twoCol{grid-template-columns:1fr} }
+    .right{display:flex;gap:8px;align-items:center}
+    .onlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#25D366}
+    .offlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#666}
+    .kickBtn{
+      padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer;
+    }
+    .kickBtn:hover{background:#2a2a2a}
+    .revealBtn{
+      padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer;
+    }
+    .revealBtn:hover{background:#2a2a2a}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1 style="margin:10px 0 0 0;">Quem sou eu? 🕵️</h1>
+    <h1 style="margin:10px 0 0 0;">Eu sou… 🕵️</h1>
     <div class="muted">Cada um escreve um personagem para outro — e o mestre revela quando alguém acertar.</div>
 
     <div class="card">
       <div>Sala: <span class="code" id="roomIdText">------</span></div>
       <div>Você: <b id="nameText"></b></div>
       <div class="muted" id="roleText" style="margin-top:6px;"></div>
+      <div class="muted" id="connText" style="margin-top:6px;"></div>
     </div>
 
-    <!-- fallback senha (só se abrir link direto) -->
     <div class="card hidden" id="passwordCard">
       <input id="passwordInput" placeholder="Senha da sala" />
       <button id="btnEnter">Entrar</button>
       <div class="muted" style="margin-top:8px;">Se você abriu o link direto, digite a senha aqui.</div>
     </div>
 
-    <!-- Lobby / controles -->
     <div class="card hidden" id="mainCard">
       <div class="twoCol">
         <div>
@@ -76,7 +86,7 @@
 
             <div class="card" style="margin-top:12px;">
               <h4 style="margin:0 0 8px 0;">Revelar para jogador</h4>
-              <div class="muted" style="margin-bottom:8px;">Clique para revelar o personagem apenas para aquela pessoa.</div>
+              <div class="muted" style="margin-bottom:8px;">Revela o personagem apenas para aquela pessoa.</div>
               <ul id="revealList"></ul>
             </div>
           </div>
@@ -86,7 +96,6 @@
       </div>
     </div>
 
-    <!-- Fase de escrita -->
     <div class="card hidden" id="writingCard">
       <h3 style="margin-top:0;">Fase de escrita ✍️</h3>
       <div class="muted">Escreva um personagem para:</div>
@@ -98,7 +107,6 @@
       <div class="muted" id="submitInfo" style="margin-top:10px;"></div>
     </div>
 
-    <!-- Fase de jogo -->
     <div class="card hidden" id="playingCard">
       <h3 style="margin-top:0;">Jogo 🎭</h3>
 
@@ -119,6 +127,16 @@
   <script>
     const socket = io();
 
+    function getPlayerToken(){
+      let t = localStorage.getItem("tbr_player_token");
+      if (!t) {
+        t = (crypto?.randomUUID?.() || (Date.now()+"-"+Math.random())).toString();
+        localStorage.setItem("tbr_player_token", t);
+      }
+      return t;
+    }
+    const playerToken = getPlayerToken();
+
     const qs = new URLSearchParams(location.search);
     const roomId = (qs.get("room") || "").trim().toUpperCase();
     const name = (qs.get("name") || "").trim();
@@ -127,17 +145,46 @@
     document.getElementById("nameText").textContent = name || "Sem nome";
 
     let isMaster = false;
+    let joined = false;
     let phase = "lobby";
-    let targetId = null;
 
-    // UI refs
     const passwordCard = document.getElementById("passwordCard");
     const mainCard = document.getElementById("mainCard");
     const writingCard = document.getElementById("writingCard");
     const playingCard = document.getElementById("playingCard");
     const masterControls = document.getElementById("masterControls");
     const roleText = document.getElementById("roleText");
+    const connText = document.getElementById("connText");
     const phasePill = document.getElementById("phasePill");
+
+    function storeSessionKey(key){
+      if (!roomId) return;
+      sessionStorage.setItem(`tbr_session_${roomId}`, key);
+    }
+    function getSessionKey(){
+      return sessionStorage.getItem(`tbr_session_${roomId}`);
+    }
+    function clearSessionKey(){
+      sessionStorage.removeItem(`tbr_session_${roomId}`);
+    }
+
+    function joinRoomWithPassword(password){
+      socket.emit("joinRoom", { roomId, password, playerName: name, playerToken });
+    }
+    function joinRoomWithSession(sessionKey){
+      socket.emit("joinRoom", { roomId, sessionKey, playerName: name, playerToken });
+    }
+
+    document.getElementById("btnEnter").onclick = () => {
+      const password = document.getElementById("passwordInput").value.trim();
+      if (!password) return alert("Digite a senha.");
+      joinRoomWithPassword(password);
+    };
+
+    function showMain(){
+      mainCard.classList.remove("hidden");
+      passwordCard.classList.add("hidden");
+    }
 
     function setPhase(p){
       phase = p;
@@ -150,42 +197,42 @@
       if (p === "playing") playingCard.classList.remove("hidden");
     }
 
-    function showMain(){
-      mainCard.classList.remove("hidden");
-    }
+    function attemptJoin(){
+      const sk = getSessionKey();
+      if (sk) {
+        joinRoomWithSession(sk);
+        return;
+      }
 
-    function joinRoomWith(password){
-      socket.emit("joinRoom", { roomId, password, playerName: name });
-    }
-
-    // fallback senha manual
-    document.getElementById("btnEnter").onclick = () => {
-      const password = document.getElementById("passwordInput").value.trim();
-      if (!password) return alert("Digite a senha.");
-      joinRoomWith(password);
-    };
-
-    // auto-join (mestre ou jogador) sem pedir senha de novo
-    (function autoJoin(){
       const masterPass = sessionStorage.getItem("tbr_master_password");
       const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
       if (masterPass && masterRoom === roomId) {
-        joinRoomWith(masterPass);
+        joinRoomWithPassword(masterPass);
         return;
       }
 
       const joinPass = sessionStorage.getItem("tbr_join_password");
       const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
       if (joinPass && joinRoom === roomId) {
-        joinRoomWith(joinPass);
+        joinRoomWithPassword(joinPass);
         return;
       }
 
-      // abriu link direto
       passwordCard.classList.remove("hidden");
-    })();
+    }
 
-    // ações mestre
+    // reconexão
+    socket.on("connect", () => {
+      connText.textContent = "Conectado ✅";
+      if (!joined) attemptJoin();
+    });
+
+    socket.on("disconnect", () => {
+      connText.textContent = "Desconectado… tentando reconectar";
+      joined = false;
+    });
+
+    // botões do mestre
     document.getElementById("btnStart").onclick = () => socket.emit("qseStartRound", roomId);
     document.getElementById("btnCloseWriting").onclick = () => socket.emit("qseCloseWriting", roomId);
 
@@ -199,34 +246,34 @@
     document.getElementById("btnLeave").onclick = () => {
       socket.emit("leaveRoom", roomId);
 
-      // limpa "senha de transição"
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
       sessionStorage.removeItem("tbr_join_password");
       sessionStorage.removeItem("tbr_join_room");
+      clearSessionKey();
 
       window.location.href = "/";
     };
 
-    /* -------- eventos -------- */
-
+    // eventos
     socket.on("errorMessage", (msg) => {
       alert(msg);
       passwordCard.classList.remove("hidden");
     });
 
-    socket.on("joinedRoom", () => {
-      // entrou: esconde senha e mostra principal
-      passwordCard.classList.add("hidden");
+    socket.on("joinedRoom", ({ sessionKey }) => {
+      joined = true;
       showMain();
 
-      roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
+      if (sessionKey) storeSessionKey(sessionKey);
 
-      // apaga senha do navegador assim que entrou (não fica salva)
+      // remove senhas temporárias
       sessionStorage.removeItem("tbr_master_password");
       sessionStorage.removeItem("tbr_master_room");
       sessionStorage.removeItem("tbr_join_password");
       sessionStorage.removeItem("tbr_join_room");
+
+      roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
     });
 
     socket.on("master", () => {
@@ -242,29 +289,50 @@
       if (payload && payload.players) {
         payload.players.forEach(p => {
           const li = document.createElement("li");
-          li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
+
+          const left = document.createElement("span");
+          left.textContent = p.name + (p.isMaster ? " 👑" : "");
+
+          const right = document.createElement("span");
+          right.className = "right";
+
+          const dot = document.createElement("span");
+          dot.className = p.online ? "onlineDot" : "offlineDot";
+          dot.title = p.online ? "online" : "offline";
+          right.appendChild(dot);
+
+          if (isMaster && !p.isMaster) {
+            const btn = document.createElement("button");
+            btn.className = "kickBtn";
+            btn.textContent = "Expulsar";
+            btn.onclick = () => {
+              if (confirm(`Expulsar ${p.name}?`)) {
+                socket.emit("kickPlayer", { roomId, targetToken: p.token });
+              }
+            };
+            right.appendChild(btn);
+          }
+
+          li.appendChild(left);
+          li.appendChild(right);
           ul.appendChild(li);
         });
       }
     });
 
-    socket.on("qsePhase", ({ phase }) => {
-      setPhase(phase);
-    });
+    socket.on("qsePhase", ({ phase }) => setPhase(phase));
 
-    socket.on("qseYourTarget", ({ targetId: tid, targetName }) => {
-      targetId = tid;
+    socket.on("qseYourTarget", ({ targetName }) => {
       document.getElementById("targetName").textContent = targetName;
       document.getElementById("characterText").value = "";
       document.getElementById("submitInfo").textContent = "";
     });
 
     socket.on("qseSubmittedOK", () => {
-      document.getElementById("submitInfo").textContent = "Enviado ✅ Agora aguarde o mestre fechar a escrita.";
+      document.getElementById("submitInfo").textContent = "Enviado ✅ Aguarde o mestre fechar a escrita.";
     });
 
     socket.on("qseWritingStatus", (status) => {
-      // lista pro mestre (e pode aparecer pra todo mundo também, não tem segredo)
       const ul = document.getElementById("writingStatus");
       const revealUl = document.getElementById("revealList");
       ul.innerHTML = "";
@@ -272,24 +340,19 @@
 
       status.forEach(s => {
         const li = document.createElement("li");
-        li.innerHTML = `<span>${s.name}</span><span>${s.active ? (s.submitted ? "✅" : "⏳") : "❌"}</span>`;
+        const statusIcon = s.active ? (s.submitted ? "✅" : "⏳") : "❌";
+        li.innerHTML = `<span>${s.name}</span><span>${statusIcon}</span>`;
         ul.appendChild(li);
 
-        // reveal list (só faz sentido na fase playing, mas deixamos sempre)
+        // revelar (mestre)
         const rli = document.createElement("li");
-        const btn = document.createElement("button");
-        btn.textContent = "Revelar";
-        btn.onclick = () => socket.emit("qseRevealTo", { roomId, targetId: s.id });
-        btn.style.padding = "10px";
-        btn.style.borderRadius = "10px";
-        btn.style.border = "1px solid #333";
-        btn.style.background = "#1f1f1f";
-        btn.style.color = "#fff";
-        btn.style.cursor = "pointer";
-        btn.onmouseover = () => btn.style.background = "#2a2a2a";
-        btn.onmouseout = () => btn.style.background = "#1f1f1f";
-
         rli.innerHTML = `<span>${s.name}</span>`;
+
+        const btn = document.createElement("button");
+        btn.className = "revealBtn";
+        btn.textContent = "Revelar";
+        btn.onclick = () => socket.emit("qseRevealTo", { roomId, targetToken: s.token });
+
         rli.appendChild(btn);
         revealUl.appendChild(rli);
       });
@@ -315,20 +378,23 @@
     });
 
     socket.on("qseExcluded", () => {
-      // não é erro: apenas avisar que ficou fora por não enviar (ou por entrar no meio)
-      // você pode comentar esse alert se ficar chato
       alert("Você ficou fora desta rodada (não enviou a tempo ou entrou no meio). Aguarde a próxima.");
-    });
-
-    socket.on("qseRevealedUpdate", ({ revealedToTarget }) => {
-      // opcional: se quiser depois, a gente marca no UI do mestre quem já foi revelado
-      // por enquanto deixo quieto
     });
 
     socket.on("roomClosed", () => {
       alert("O mestre saiu. A sala foi fechada.");
+      clearSessionKey();
       window.location.href = "/";
     });
+
+    socket.on("kicked", ({ reason }) => {
+      alert(reason || "Você foi expulso.");
+      clearSessionKey();
+      window.location.href = "/";
+    });
+
+    // primeira tentativa
+    attemptJoin();
   </script>
 </body>
 </html>
