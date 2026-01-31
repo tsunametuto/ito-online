@@ -1377,40 +1377,72 @@ io.on("connection", (socket) => {
   });
 
   socket.on("infiltradoReveal", (roomId) => {
-    roomId = (roomId || "").toString().trim().toUpperCase();
-    const room = rooms[roomId];
-    if (!room || room.gameType !== "infiltrado") return;
+  roomId = (roomId || "").toString().trim().toUpperCase();
+  const room = rooms[roomId];
+  if (!room || room.gameType !== "infiltrado") return;
 
-    const callerToken = getCallerToken(room, socket.id);
-    if (!callerToken || callerToken !== room.masterToken) return;
+  const callerToken = getCallerToken(room, socket.id);
+  if (!callerToken || callerToken !== room.masterToken) return;
 
-    ensureInfiltrado(room);
+  ensureInfiltrado(room);
 
-    if (!["round1", "round2", "round3", "voting"].includes(room.infiltrado.phase)) return;
+  // só permite revelar se a rodada já começou
+  if (!["round1", "round2", "round3", "voting"].includes(room.infiltrado.phase)) return;
 
-    const res = topVoteResultInfiltrado(room);
-    if (!res.ok) {
-      io.to(roomId).emit("infiltradoNeedResolve", res.reason);
-      return;
-    }
+  const res = topVoteResultInfiltrado(room);
+  if (!res.ok) {
+    io.to(roomId).emit("infiltradoNeedResolve", res.reason);
+    return;
+  }
 
-    room.infiltrado.phase = "revealed";
+  // marca estado como "revelado" mas sem revelar conceitos ainda
+  room.infiltrado.phase = "revealed";
+  room.infiltrado.revealedInfiltrator = true;
+  room.infiltrado.revealedConcepts = false;
 
-    const infToken = room.infiltrado.infiltradoToken;
-    const infName = room.players[infToken]?.name || "(desconectado)";
+  const infToken = room.infiltrado.infiltradoToken;
+  const infName = room.players[infToken]?.name || "(desconectado)";
 
-    io.to(roomId).emit("infiltradoRevealed", {
-      infiltradoToken: infToken,
-      infiltradoName: infName,
-      topVotedToken: res.topToken,
-      topVotedName: room.players[res.topToken]?.name || "Jogador",
-      tally: res.tally,
+  // ✅ envia SÓ quem é + resultado de votos
+  io.to(roomId).emit("infiltradoInfiltratorRevealed", {
+    infiltradoToken: infToken,
+    infiltradoName: infName,
+    topVotedToken: res.topToken,
+    topVotedName: room.players[res.topToken]?.name || "Jogador",
+    tally: res.tally
+  });
 
-      // reveal final (pra rir)
-      themeName: room.infiltrado.themeName,
-      concept: room.infiltrado.concept,
-      infiltradoHint: room.infiltrado.infiltradoHint,
-    });
+  emitInfiltradoState(roomId);
+});
+
+socket.on("infiltradoRevealConcepts", (roomId) => {
+  roomId = (roomId || "").toString().trim().toUpperCase();
+  const room = rooms[roomId];
+  if (!room || room.gameType !== "infiltrado") return;
+
+  const callerToken = getCallerToken(room, socket.id);
+  if (!callerToken || callerToken !== room.masterToken) return;
+
+  ensureInfiltrado(room);
+
+  // Só faz sentido depois do infiltrado já ter sido revelado
+  if (room.infiltrado.phase !== "revealed") {
+    socket.emit("errorMessage", "Revele o infiltrado primeiro.");
+    return;
+  }
+
+  room.infiltrado.revealedConcepts = true;
+
+  // ✅ agora sim revela o tema + conceito + pista
+  io.to(roomId).emit("infiltradoConceptsRevealed", {
+    themeName: room.infiltrado.themeName,
+    concept: room.infiltrado.concept,
+    infiltradoHint: room.infiltrado.infiltradoHint
+  });
+
+  emitInfiltradoState(roomId);
+});
+
 
     emitInfiltradoState(roomId);
   });
@@ -1491,3 +1523,4 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+
