@@ -26,12 +26,12 @@
     <h1 style="margin:10px 0 0 0;">TBR</h1>
     <div class="muted">Plataforma de jogos (versão inicial)</div>
 
-    <!-- Etapa 1 -->
     <div class="card" id="step1">
       <select id="gameSelect">
-        <option value="ito">ITO (números)</option>
-        <option value="quem-sou-eu">Quem sou eu?</option>
-        <option value="impostor">Impostor (em breve)</option>
+        <!-- values permanecem os mesmos (pastas/arquivos iguais) -->
+        <option value="ito">De 1 a 100</option>
+        <option value="quem-sou-eu">Eu sou…</option>
+        <option value="impostor">Infiltrado (em breve)</option>
       </select>
 
       <input id="nickname" placeholder="Seu apelido" maxlength="20" />
@@ -42,11 +42,10 @@
       </div>
 
       <div class="muted" style="margin-top:10px;">
-        Você escolhe o jogo, coloca seu apelido e cria ou entra em uma sala.
+        Escolha o jogo, coloque seu apelido e crie ou entre em uma sala.
       </div>
     </div>
 
-    <!-- Etapa 2 (mestre) -->
     <div class="card hidden" id="step2">
       <button id="back2">← Voltar</button>
 
@@ -68,7 +67,6 @@
       </div>
     </div>
 
-    <!-- Etapa 3 (jogador) -->
     <div class="card hidden" id="step3">
       <button id="back3">← Voltar</button>
 
@@ -84,6 +82,17 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
+
+    // playerToken persistente (não é senha; é só ID do jogador)
+    function getPlayerToken(){
+      let t = localStorage.getItem("tbr_player_token");
+      if (!t) {
+        t = (crypto?.randomUUID?.() || (Date.now()+"-"+Math.random())).toString();
+        localStorage.setItem("tbr_player_token", t);
+      }
+      return t;
+    }
+    const playerToken = getPlayerToken();
 
     let selectedGame = "ito";
     let nickname = "";
@@ -158,7 +167,7 @@
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
 
-      // só pra atravessar o redirecionamento (o jogo apaga depois)
+      // senha só pra atravessar o redirecionamento (o jogo vai trocar por sessionKey)
       sessionStorage.setItem("tbr_master_password", password);
       sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
@@ -166,7 +175,8 @@
         roomId: pendingRoomCode,
         password,
         masterName: nickname,
-        gameType: selectedGame
+        gameType: selectedGame,
+        playerToken
       });
     };
 
@@ -178,25 +188,31 @@
       if (!roomId) return alert("Digite o código.");
       if (!password) return alert("Digite a senha.");
 
-      // só pra atravessar o redirecionamento (o jogo apaga depois)
+      // senha só pra atravessar o redirecionamento (o jogo vai trocar por sessionKey)
       sessionStorage.setItem("tbr_join_password", password);
       sessionStorage.setItem("tbr_join_room", roomId);
 
       socket.emit("joinRoom", {
         roomId,
         password,
-        playerName: nickname
+        playerName: nickname,
+        playerToken
       });
     };
 
     socket.on("errorMessage", (msg) => alert(msg));
 
-    socket.on("roomCreated", ({ roomId, gameType }) => {
+    socket.on("roomCreated", ({ roomId, gameType, sessionKey }) => {
+      // guarda sessionKey pro jogo usar (sem senha)
+      sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
+
       window.location.href =
         `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
     });
 
-    socket.on("joinedRoom", ({ roomId, gameType }) => {
+    socket.on("joinedRoom", ({ roomId, gameType, sessionKey }) => {
+      sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
+
       window.location.href =
         `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
     });
