@@ -31,9 +31,42 @@
     .kickBtn:hover{background:#2a2a2a}
     .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #333;background:#151515;color:#ddd;font-size:12px}
     .bigQ{font-size:18px;font-weight:800;color:#25D366}
-    .voteBtn{padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer}
+    .voteBtn{
+      padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer;
+      min-width:120px;
+    }
     .voteBtn:hover{background:#2a2a2a}
-    .voted{border-color:#25D366}
+    .voteBtn.voted{
+      border:2px solid #25D366;
+      background:#152016;
+      font-weight:800;
+    }
+    .voteBtn.voted::after{
+      content:" ✅";
+    }
+
+    .resultBox{
+      text-align:left;
+      border:1px solid #222;
+      background:#0f0f0f;
+      border-radius:12px;
+      padding:14px;
+      margin-top:10px;
+    }
+    .resultLine{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:10px;
+      padding:10px 0;
+      border-bottom:1px solid #1f1f1f;
+    }
+    .resultLine:last-child{border-bottom:none}
+    .resultTitle{font-weight:900;font-size:16px}
+    .resultName{font-weight:900;color:#25D366}
+    .voteMeta{color:#aaa;font-size:13px;margin-top:4px}
+    .whoVoted{color:#ddd;font-size:13px;margin-top:6px}
+    .whoVoted span{color:#25D366;font-weight:800}
   </style>
 </head>
 <body>
@@ -79,7 +112,6 @@
       </div>
     </div>
 
-    <!-- FASE: answering -->
     <div class="card hidden" id="answerCard">
       <h3 style="margin-top:0;">Responda</h3>
       <div class="muted">Pergunta:</div>
@@ -90,7 +122,6 @@
       <div class="muted" id="answerInfo" style="margin-top:10px;"></div>
     </div>
 
-    <!-- FASE: voting/discussion -->
     <div class="card hidden" id="voteCard">
       <h3 style="margin-top:0;">Discussão + Votação</h3>
       <div class="muted">Pergunta principal:</div>
@@ -105,6 +136,7 @@
         <h4 style="margin:0 0 8px 0;">Votação</h4>
         <div class="muted" style="margin-bottom:8px;">
           Vote em quem você acha que é o espião. Pode votar em si. Pode trocar o voto.
+          <br><b>Dica:</b> seu voto fica destacado.
         </div>
         <ul id="voteList"></ul>
         <div class="muted" id="voteInfo" style="margin-top:10px;"></div>
@@ -118,7 +150,6 @@
       </div>
     </div>
 
-    <!-- FASE: revealed -->
     <div class="card hidden" id="revealedCard">
       <h3 style="margin-top:0;">Resultado</h3>
       <div id="resultText"></div>
@@ -148,6 +179,11 @@
 
     let isMaster = false;
     let joined = false;
+
+    // estado local para UI
+    let tokenToName = {};        // token -> nome
+    let latestVotesByVoter = {}; // voterToken -> targetToken
+    let latestPlayers = [];      // [{token,name,isMaster,online,isActive,hasAnswered}...]
 
     const passwordCard = document.getElementById("passwordCard");
     const mainCard = document.getElementById("mainCard");
@@ -187,24 +223,15 @@
 
     function attemptJoin(){
       const sk = getSessionKey();
-      if (sk) {
-        joinRoomWithSession(sk);
-        return;
-      }
+      if (sk) { joinRoomWithSession(sk); return; }
 
       const masterPass = sessionStorage.getItem("tbr_master_password");
       const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
-      if (masterPass && masterRoom === roomId) {
-        joinRoomWithPassword(masterPass);
-        return;
-      }
+      if (masterPass && masterRoom === roomId) { joinRoomWithPassword(masterPass); return; }
 
       const joinPass = sessionStorage.getItem("tbr_join_password");
       const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
-      if (joinPass && joinRoom === roomId) {
-        joinRoomWithPassword(joinPass);
-        return;
-      }
+      if (joinPass && joinRoom === roomId) { joinRoomWithPassword(joinPass); return; }
 
       passwordCard.classList.remove("hidden");
     }
@@ -226,6 +253,22 @@
       if (phase === "revealed") revealedCard.classList.remove("hidden");
     }
 
+    function renderVoteButtons(){
+      // destaca o meu voto atual
+      const myVote = latestVotesByVoter[playerToken];
+
+      document.querySelectorAll("[data-vote-token]").forEach(btn => {
+        const t = btn.getAttribute("data-vote-token");
+        if (t && myVote === t) {
+          btn.classList.add("voted");
+          btn.textContent = "Votado";
+        } else {
+          btn.classList.remove("voted");
+          btn.textContent = "Votar";
+        }
+      });
+    }
+
     socket.on("connect", () => {
       connText.textContent = "Conectado ✅";
       if (!joined) attemptJoin();
@@ -236,7 +279,6 @@
       joined = false;
     });
 
-    // mestre
     document.getElementById("btnStart").onclick = () => {
       socket.emit("spyStartRound", roomId);
       document.getElementById("answerInfo").textContent = "";
@@ -252,7 +294,6 @@
       socket.emit("spyRevealSpy", roomId);
     };
 
-    // jogador
     document.getElementById("btnSend").onclick = () => {
       const text = document.getElementById("answerText").value.trim();
       socket.emit("spySubmitAnswer", { roomId, text });
@@ -300,7 +341,10 @@
       const ul = document.getElementById("players");
       ul.innerHTML = "";
 
+      tokenToName = {};
       if (payload && payload.players) {
+        payload.players.forEach(p => tokenToName[p.token] = p.name);
+
         payload.players.forEach(p => {
           const li = document.createElement("li");
 
@@ -334,7 +378,6 @@
       }
     });
 
-    // pergunta individual (cada um recebe a sua)
     socket.on("spyQuestion", ({ question }) => {
       document.getElementById("yourQuestion").textContent = question;
       document.getElementById("answerInfo").textContent = "";
@@ -370,36 +413,66 @@
       alert(msg);
     });
 
-    socket.on("spyRevealed", ({ spyName, principal, paralela, topVotedName, tally }) => {
+    socket.on("spyRevealed", ({ spyToken, spyName, topVotedToken, topVotedName, tally, principal, paralela }) => {
       setPhase("revealed");
+
+      const getVotes = (targetToken) => {
+        const voters = [];
+        for (const voterToken in (latestVotesByVoter || {})) {
+          if (latestVotesByVoter[voterToken] === targetToken) {
+            voters.push(voterToken);
+          }
+        }
+        return voters;
+      };
+
+      const votersTop = getVotes(topVotedToken);
+      const votersSpy = getVotes(spyToken);
+
+      const topCount = tally && tally[topVotedToken] ? tally[topVotedToken] : 0;
+      const spyCount = tally && tally[spyToken] ? tally[spyToken] : 0;
+
+      const fmtVoters = (arr) => {
+        if (!arr.length) return `<span>Ninguém</span>`;
+        return arr.map(t => `<span>${tokenToName[t] || "Jogador"}</span>`).join(", ");
+      };
 
       const result = document.getElementById("resultText");
       result.innerHTML = `
-        <p><b>Mais votado:</b> ${topVotedName}</p>
-        <p><b>Espião:</b> ${spyName}</p>
-        <p class="muted"><b>Pergunta principal:</b> ${principal}</p>
-        <p class="muted"><b>Pergunta do espião:</b> ${paralela}</p>
-        <hr style="border:0;border-top:1px solid #222;margin:12px 0;">
-        <p><b>Votos (contagem):</b></p>
-      `;
+        <div class="resultBox">
+          <div class="resultLine">
+            <div>
+              <div class="resultTitle">Mais votado</div>
+              <div class="resultName">${topVotedName}</div>
+              <div class="voteMeta">${topCount} voto(s)</div>
+              <div class="whoVoted">Votaram: ${fmtVoters(votersTop)}</div>
+            </div>
+          </div>
 
-      const tokens = Object.keys(tally || {});
-      if (!tokens.length) {
-        result.innerHTML += `<p class="muted">Sem votos.</p>`;
-      } else {
-        tokens.sort((a,b)=> (tally[b]-tally[a]));
-        tokens.forEach(t => {
-          result.innerHTML += `<p class="muted">${t} → ${tally[t]}</p>`;
-        });
-        result.innerHTML += `<p class="muted">(Os códigos acima são tokens internos; se quiser, eu deixo bonitinho com nomes.)</p>`;
-      }
+          <div class="resultLine">
+            <div>
+              <div class="resultTitle">Espião</div>
+              <div class="resultName">${spyName || "(desconectado)"}</div>
+              <div class="voteMeta">${spyCount} voto(s)</div>
+              <div class="whoVoted">Votaram: ${fmtVoters(votersSpy)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="muted" style="margin-top:10px;">
+          <b>Pergunta principal:</b> ${principal}<br/>
+          <b>Pergunta do espião:</b> ${paralela}
+        </div>
+      `;
     });
 
-    // estado geral (pra montar votação e fase)
     socket.on("spyState", (state) => {
       if (!state) return;
 
       setPhase(state.phase);
+
+      latestVotesByVoter = state.votesByVoter || {};
+      latestPlayers = state.players || [];
 
       // monta a lista de votação usando players ativos
       if (state.phase === "voting" && state.players) {
@@ -408,10 +481,6 @@
         const voteUl = document.getElementById("voteList");
         voteUl.innerHTML = "";
 
-        // descobrir meu token para marcar meu voto
-        // (a gente não conhece o token diretamente; vamos inferir pelo nome + "você")
-        // melhor: marcar só por retorno de votos (sem destacar meu voto), mas dá pra fazer simples:
-        // vamos só destacar quem está "mais votado" depois — por enquanto, marcar o voto do "meu voter" não dá com segurança sem token local.
         active.forEach(p => {
           const li = document.createElement("li");
 
@@ -420,6 +489,7 @@
 
           const btn = document.createElement("button");
           btn.className = "voteBtn";
+          btn.setAttribute("data-vote-token", p.token);
           btn.textContent = "Votar";
           btn.onclick = () => socket.emit("spyVote", { roomId, targetToken: p.token });
 
@@ -427,7 +497,17 @@
           li.appendChild(btn);
           voteUl.appendChild(li);
         });
+
+        renderVoteButtons();
+      } else {
+        // se sair da fase voting, limpa
+        if (state.phase !== "voting") {
+          document.getElementById("voteList").innerHTML = "";
+        }
       }
+
+      // sempre que o estado atualizar, refletir confirmação do voto
+      if (state.phase === "voting") renderVoteButtons();
     });
 
     socket.on("roomClosed", () => {
