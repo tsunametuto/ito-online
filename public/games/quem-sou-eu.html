@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Quem sou eu?</title>
+  <style>
+    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
+    .wrap{max-width:820px;margin:0 auto}
+    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0}
+    input,button,textarea{
+      width:100%;box-sizing:border-box;padding:14px;border-radius:10px;
+      border:1px solid #333;background:#1f1f1f;color:#fff;font-size:16px
+    }
+    textarea{min-height:90px;resize:vertical}
+    button{cursor:pointer}
+    button:hover{background:#2a2a2a}
+    .btnRow{display:flex;gap:10px;flex-wrap:wrap}
+    .btnRow>*{flex:1;min-width:160px}
+    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;font-weight:800}
+    ul{list-style:none;padding:0;margin:0}
+    li{padding:8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .muted{color:#aaa;font-size:13px;line-height:1.4}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #333;background:#151515;color:#ddd;font-size:12px}
+    .hidden{display:none !important}
+    .twoCol{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width: 760px){ .twoCol{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 style="margin:10px 0 0 0;">Quem sou eu? 🕵️</h1>
+    <div class="muted">Cada um escreve um personagem para outro — e o mestre revela quando alguém acertar.</div>
+
+    <div class="card">
+      <div>Sala: <span class="code" id="roomIdText">------</span></div>
+      <div>Você: <b id="nameText"></b></div>
+      <div class="muted" id="roleText" style="margin-top:6px;"></div>
+    </div>
+
+    <!-- fallback senha (só se abrir link direto) -->
+    <div class="card hidden" id="passwordCard">
+      <input id="passwordInput" placeholder="Senha da sala" />
+      <button id="btnEnter">Entrar</button>
+      <div class="muted" style="margin-top:8px;">Se você abriu o link direto, digite a senha aqui.</div>
+    </div>
+
+    <!-- Lobby / controles -->
+    <div class="card hidden" id="mainCard">
+      <div class="twoCol">
+        <div>
+          <h3 style="margin-top:0;">Jogadores</h3>
+          <ul id="players"></ul>
+          <div class="muted" style="margin-top:8px;">
+            <span class="pill" id="phasePill">Fase: lobby</span>
+          </div>
+        </div>
+
+        <div>
+          <h3 style="margin-top:0;">Ações</h3>
+
+          <div id="masterControls" class="hidden">
+            <div class="btnRow">
+              <button id="btnStart">Iniciar rodada</button>
+              <button id="btnCloseWriting">Fechar escrita</button>
+            </div>
+
+            <div class="muted" style="margin-top:10px;">
+              “Fechar escrita” exclui da rodada quem não enviou e continua com quem enviou.
+            </div>
+
+            <div class="card" style="margin-top:12px;">
+              <h4 style="margin:0 0 8px 0;">Status da escrita</h4>
+              <ul id="writingStatus"></ul>
+            </div>
+
+            <div class="card" style="margin-top:12px;">
+              <h4 style="margin:0 0 8px 0;">Revelar para jogador</h4>
+              <div class="muted" style="margin-bottom:8px;">Clique para revelar o personagem apenas para aquela pessoa.</div>
+              <ul id="revealList"></ul>
+            </div>
+          </div>
+
+          <button id="btnLeave" style="margin-top:10px;">Sair</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fase de escrita -->
+    <div class="card hidden" id="writingCard">
+      <h3 style="margin-top:0;">Fase de escrita ✍️</h3>
+      <div class="muted">Escreva um personagem para:</div>
+      <div style="font-size:22px;margin:6px 0;"><b id="targetName">---</b></div>
+
+      <textarea id="characterText" placeholder="Ex: Naruto, Albert Einstein, Homem-Aranha... (até 60 caracteres)"></textarea>
+      <button id="btnSubmit" style="margin-top:10px;">Enviar</button>
+
+      <div class="muted" id="submitInfo" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- Fase de jogo -->
+    <div class="card hidden" id="playingCard">
+      <h3 style="margin-top:0;">Jogo 🎭</h3>
+
+      <div class="card">
+        <h4 style="margin:0 0 8px 0;">Seu personagem (só aparece quando o mestre revelar)</h4>
+        <div id="yourCharacter" style="font-size:20px;color:#25D366;font-weight:800;">(ainda não revelado)</div>
+      </div>
+
+      <div class="card">
+        <h4 style="margin:0 0 8px 0;">Personagens dos outros</h4>
+        <div class="muted" style="margin-bottom:8px;">Você vê o de todo mundo, menos o seu.</div>
+        <ul id="othersList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const qs = new URLSearchParams(location.search);
+    const roomId = (qs.get("room") || "").trim().toUpperCase();
+    const name = (qs.get("name") || "").trim();
+
+    document.getElementById("roomIdText").textContent = roomId || "??????";
+    document.getElementById("nameText").textContent = name || "Sem nome";
+
+    let isMaster = false;
+    let phase = "lobby";
+    let targetId = null;
+
+    // UI refs
+    const passwordCard = document.getElementById("passwordCard");
+    const mainCard = document.getElementById("mainCard");
+    const writingCard = document.getElementById("writingCard");
+    const playingCard = document.getElementById("playingCard");
+    const masterControls = document.getElementById("masterControls");
+    const roleText = document.getElementById("roleText");
+    const phasePill = document.getElementById("phasePill");
+
+    function setPhase(p){
+      phase = p;
+      phasePill.textContent = "Fase: " + p;
+
+      writingCard.classList.add("hidden");
+      playingCard.classList.add("hidden");
+
+      if (p === "writing") writingCard.classList.remove("hidden");
+      if (p === "playing") playingCard.classList.remove("hidden");
+    }
+
+    function showMain(){
+      mainCard.classList.remove("hidden");
+    }
+
+    function joinRoomWith(password){
+      socket.emit("joinRoom", { roomId, password, playerName: name });
+    }
+
+    // fallback senha manual
+    document.getElementById("btnEnter").onclick = () => {
+      const password = document.getElementById("passwordInput").value.trim();
+      if (!password) return alert("Digite a senha.");
+      joinRoomWith(password);
+    };
+
+    // auto-join (mestre ou jogador) sem pedir senha de novo
+    (function autoJoin(){
+      const masterPass = sessionStorage.getItem("tbr_master_password");
+      const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
+      if (masterPass && masterRoom === roomId) {
+        joinRoomWith(masterPass);
+        return;
+      }
+
+      const joinPass = sessionStorage.getItem("tbr_join_password");
+      const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
+      if (joinPass && joinRoom === roomId) {
+        joinRoomWith(joinPass);
+        return;
+      }
+
+      // abriu link direto
+      passwordCard.classList.remove("hidden");
+    })();
+
+    // ações mestre
+    document.getElementById("btnStart").onclick = () => socket.emit("qseStartRound", roomId);
+    document.getElementById("btnCloseWriting").onclick = () => socket.emit("qseCloseWriting", roomId);
+
+    // enviar personagem
+    document.getElementById("btnSubmit").onclick = () => {
+      const text = document.getElementById("characterText").value.trim();
+      socket.emit("qseSubmit", { roomId, text });
+    };
+
+    // sair
+    document.getElementById("btnLeave").onclick = () => {
+      socket.emit("leaveRoom", roomId);
+
+      // limpa "senha de transição"
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
+
+      window.location.href = "/";
+    };
+
+    /* -------- eventos -------- */
+
+    socket.on("errorMessage", (msg) => {
+      alert(msg);
+      passwordCard.classList.remove("hidden");
+    });
+
+    socket.on("joinedRoom", () => {
+      // entrou: esconde senha e mostra principal
+      passwordCard.classList.add("hidden");
+      showMain();
+
+      roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
+
+      // apaga senha do navegador assim que entrou (não fica salva)
+      sessionStorage.removeItem("tbr_master_password");
+      sessionStorage.removeItem("tbr_master_room");
+      sessionStorage.removeItem("tbr_join_password");
+      sessionStorage.removeItem("tbr_join_room");
+    });
+
+    socket.on("master", () => {
+      isMaster = true;
+      masterControls.classList.remove("hidden");
+      roleText.textContent = "Você é o mestre 👑";
+    });
+
+    socket.on("playersUpdate", (payload) => {
+      const ul = document.getElementById("players");
+      ul.innerHTML = "";
+
+      if (payload && payload.players) {
+        payload.players.forEach(p => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span>${p.name}</span><span>${p.isMaster ? "👑" : ""}</span>`;
+          ul.appendChild(li);
+        });
+      }
+    });
+
+    socket.on("qsePhase", ({ phase }) => {
+      setPhase(phase);
+    });
+
+    socket.on("qseYourTarget", ({ targetId: tid, targetName }) => {
+      targetId = tid;
+      document.getElementById("targetName").textContent = targetName;
+      document.getElementById("characterText").value = "";
+      document.getElementById("submitInfo").textContent = "";
+    });
+
+    socket.on("qseSubmittedOK", () => {
+      document.getElementById("submitInfo").textContent = "Enviado ✅ Agora aguarde o mestre fechar a escrita.";
+    });
+
+    socket.on("qseWritingStatus", (status) => {
+      // lista pro mestre (e pode aparecer pra todo mundo também, não tem segredo)
+      const ul = document.getElementById("writingStatus");
+      const revealUl = document.getElementById("revealList");
+      ul.innerHTML = "";
+      revealUl.innerHTML = "";
+
+      status.forEach(s => {
+        const li = document.createElement("li");
+        li.innerHTML = `<span>${s.name}</span><span>${s.active ? (s.submitted ? "✅" : "⏳") : "❌"}</span>`;
+        ul.appendChild(li);
+
+        // reveal list (só faz sentido na fase playing, mas deixamos sempre)
+        const rli = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.textContent = "Revelar";
+        btn.onclick = () => socket.emit("qseRevealTo", { roomId, targetId: s.id });
+        btn.style.padding = "10px";
+        btn.style.borderRadius = "10px";
+        btn.style.border = "1px solid #333";
+        btn.style.background = "#1f1f1f";
+        btn.style.color = "#fff";
+        btn.style.cursor = "pointer";
+        btn.onmouseover = () => btn.style.background = "#2a2a2a";
+        btn.onmouseout = () => btn.style.background = "#1f1f1f";
+
+        rli.innerHTML = `<span>${s.name}</span>`;
+        rli.appendChild(btn);
+        revealUl.appendChild(rli);
+      });
+    });
+
+    socket.on("qseRoundCancelled", (msg) => {
+      alert(msg);
+      setPhase("lobby");
+    });
+
+    socket.on("qseOthersCharacters", (list) => {
+      const ul = document.getElementById("othersList");
+      ul.innerHTML = "";
+      list.forEach(item => {
+        const li = document.createElement("li");
+        li.innerHTML = `<span><b>${item.name}</b></span><span>${item.character}</span>`;
+        ul.appendChild(li);
+      });
+    });
+
+    socket.on("qseYourCharacter", ({ character }) => {
+      document.getElementById("yourCharacter").textContent = character;
+    });
+
+    socket.on("qseExcluded", () => {
+      // não é erro: apenas avisar que ficou fora por não enviar (ou por entrar no meio)
+      // você pode comentar esse alert se ficar chato
+      alert("Você ficou fora desta rodada (não enviou a tempo ou entrou no meio). Aguarde a próxima.");
+    });
+
+    socket.on("qseRevealedUpdate", ({ revealedToTarget }) => {
+      // opcional: se quiser depois, a gente marca no UI do mestre quem já foi revelado
+      // por enquanto deixo quieto
+    });
+
+    socket.on("roomClosed", () => {
+      alert("O mestre saiu. A sala foi fechada.");
+      window.location.href = "/";
+    });
+  </script>
+</body>
+</html>
