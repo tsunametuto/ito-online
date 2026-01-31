@@ -31,6 +31,7 @@
         <option value="ito">De 1 a 100</option>
         <option value="quem-sou-eu">Eu sou…</option>
         <option value="impostor">Espião</option>
+        <option value="infiltrado">Infiltrado</option>
       </select>
 
       <input id="nickname" placeholder="Seu apelido" maxlength="20" />
@@ -164,6 +165,7 @@
       const password = document.getElementById("masterPassword").value.trim();
       if (!password) return alert("Digite uma senha.");
 
+      // mantém seu comportamento (não salva senha em localStorage)
       sessionStorage.setItem("tbr_master_password", password);
       sessionStorage.setItem("tbr_master_room", pendingRoomCode);
 
@@ -196,18 +198,26 @@
 
     socket.on("errorMessage", (msg) => alert(msg));
 
-    socket.on("roomCreated", ({ roomId, gameType, sessionKey }) => {
+    function goToGame({ roomId, gameType, sessionKey }){
       sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
 
-      window.location.href =
-        `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
+      // ✅ envia token + sessionKey via URL (o infiltrado.html usa isso)
+      const url =
+        `/games/${gameType}.html` +
+        `?room=${encodeURIComponent(roomId)}` +
+        `&name=${encodeURIComponent(nickname)}` +
+        `&token=${encodeURIComponent(playerToken)}` +
+        `&sessionKey=${encodeURIComponent(sessionKey)}`;
+
+      window.location.href = url;
+    }
+
+    socket.on("roomCreated", ({ roomId, gameType, sessionKey }) => {
+      goToGame({ roomId, gameType, sessionKey });
     });
 
     socket.on("joinedRoom", ({ roomId, gameType, sessionKey }) => {
-      sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
-
-      window.location.href =
-        `/games/${gameType}.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(nickname)}`;
+      goToGame({ roomId, gameType, sessionKey });
     });
   </script>
 </body>
