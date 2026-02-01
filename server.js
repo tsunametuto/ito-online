@@ -41,6 +41,7 @@ const rooms = {};
 //   qse: {...}
 //   spy: {...}
 //   infiltrado: {...}
+//   nota: {...} // ✅ e a nota é...
 // }
 
 function generateRoomId() {
@@ -124,6 +125,21 @@ function getCallerToken(room, socketId) {
   return Object.keys(room.players).find((t) => room.players[t].socketId === socketId) || null;
 }
 
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+function pickOne(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+function pickDistinct(arr, n) {
+  return shuffle(arr).slice(0, Math.min(n, arr.length));
+}
+
 function schedulePlayerRemoval(roomId, token) {
   const room = rooms[roomId];
   if (!room) return;
@@ -141,6 +157,11 @@ function schedulePlayerRemoval(roomId, token) {
     if (pp.online) {
       pp.disconnectTimer = null;
       return;
+    }
+
+    // Antes de remover de vez, ajusta estados de jogos que dependem do player
+    if (r.nota) {
+      notaHandlePlayerRemoved(roomId, token);
     }
 
     delete r.players[token];
@@ -186,6 +207,7 @@ function schedulePlayerRemoval(roomId, token) {
     if (r.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
     if (r.gameType === "impostor") emitSpyState(roomId);
     if (r.gameType === "infiltrado") emitInfiltradoState(roomId);
+    if (r.gameType === "e-a-nota-e") emitNotaState(roomId);
   }, RECONNECT_GRACE_MS);
 }
 
@@ -216,6 +238,9 @@ function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
       if (s) s.disconnect(true);
     }
   }
+
+  // Ajusta jogos
+  if (room.nota) notaHandlePlayerRemoved(roomId, token);
 
   delete room.players[token];
   delete room.sessions[token];
@@ -255,6 +280,7 @@ function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
   if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
   if (room.gameType === "impostor") emitSpyState(roomId);
   if (room.gameType === "infiltrado") emitInfiltradoState(roomId);
+  if (room.gameType === "e-a-nota-e") emitNotaState(roomId);
 
   if (Object.keys(room.players).length === 0) {
     scheduleEmptyRoomDeletion(roomId);
@@ -319,10 +345,7 @@ function derangement(ids) {
     const perm = [...ids].sort(() => Math.random() - 0.5);
     let ok = true;
     for (let i = 0; i < n; i++) {
-      if (perm[i] === ids[i]) {
-        ok = false;
-        break;
-      }
+      if (perm[i] === ids[i]) { ok = false; break; }
     }
     if (ok) {
       const map = {};
@@ -409,7 +432,7 @@ const SPY_QUESTION_PAIRS = [
   { principal: "Coisas que distraem no trabalho ou estudo", paralela: "Coisas que te fazem perder o foco" },
   { principal: "Motivos comuns para procrastinar", paralela: "Coisas que fazem você procrastinar" },
   { principal: "Itens que todo mundo compra no mercado", paralela: "Itens que você sempre compra" },
-  { principal: "Coisas que você compraria se tivesse dinheiro", paralela: "Coisas que você gostaria de ter" },
+  { principal: "Coisas que você compraria se tivesse dinheiro", paralela: "Coisas que você gostaria de comprar" },
   { principal: "Coisas que todo mundo reclama", paralela: "Coisas que você reclama" },
   { principal: "Coisas que dão preguiça", paralela: "Coisas que você evita fazer" },
   { principal: "Coisas que deixam alguém com fome", paralela: "Coisas que te dão vontade de comer" },
@@ -545,21 +568,6 @@ function infiltradoReset(room) {
   room.infiltrado.votesByVoter = {};
   room.infiltrado.revealedInfiltrator = false;
   room.infiltrado.revealedConcepts = false;
-}
-
-function shuffle(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-function pickOne(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-function pickDistinct(arr, n) {
-  return shuffle(arr).slice(0, Math.min(n, arr.length));
 }
 
 function emitInfiltradoState(roomId) {
@@ -723,6 +731,271 @@ function goNextInfiltradoRound(roomId) {
   emitInfiltradoState(roomId);
 }
 
+/* ------------------ E A NOTA É... (NOVO) ------------------ */
+
+function ensureNota(room) {
+  if (!room.nota) {
+    room.nota = {
+      phase: "lobby", // lobby | guessing | revealed
+      active: new Set(), // tokens do ciclo atual
+      turnOrder: [],     // ordem do ciclo
+      turnIndex: 0,
+
+      targetToken: null,
+      targetRating: null,
+
+      guessesByToken: {}, // token -> 1..10
+      scores: {},         // token -> pontos (persistente enquanto sala existir)
+
+      cycleId: 0,
+    };
+  }
+}
+
+function notaResetTurn(room) {
+  ensureNota(room);
+  room.nota.phase = "lobby";
+  room.nota.targetToken = null;
+  room.nota.targetRating = null;
+  room.nota.guessesByToken = {};
+}
+
+function notaStartNewCycle(roomId) {
+  const room = rooms[roomId];
+  if (!room) return { ok: false, error: "Sala inválida." };
+  ensureNota(room);
+
+  const tokens = Object.keys(room.players).filter(t => room.players[t]?.online);
+  if (tokens.length < 2) return { ok: false, error: "Precisa de pelo menos 2 jogadores online para iniciar." };
+
+  room.nota.cycleId += 1;
+  room.nota.active = new Set(tokens);
+  room.nota.turnOrder = shuffle(tokens); // ✅ aleatório no início do ciclo
+  room.nota.turnIndex = 0;
+  notaResetTurn(room);
+
+  // garante scores inicializados
+  tokens.forEach(t => { if (room.nota.scores[t] == null) room.nota.scores[t] = 0; });
+
+  io.to(roomId).emit("notaCycleStarted", {
+    cycleId: room.nota.cycleId,
+    order: room.nota.turnOrder.map(t => room.players[t]?.name).filter(Boolean),
+  });
+
+  emitNotaState(roomId);
+  return { ok: true };
+}
+
+function notaPickNextOnlineTarget(room) {
+  // tenta achar próximo alvo online dentro do turnOrder
+  for (let tries = 0; tries < room.nota.turnOrder.length; tries++) {
+    const idx = room.nota.turnIndex % room.nota.turnOrder.length;
+    const token = room.nota.turnOrder[idx];
+    if (token && room.players[token]?.online && room.nota.active.has(token)) {
+      return token;
+    }
+    room.nota.turnIndex += 1;
+  }
+  return null;
+}
+
+function notaStartTurn(roomId) {
+  const room = rooms[roomId];
+  if (!room) return { ok: false, error: "Sala inválida." };
+  ensureNota(room);
+
+  // se não tem ciclo, cria um
+  if (!room.nota.turnOrder.length || room.nota.active.size < 2) {
+    const res = notaStartNewCycle(roomId);
+    if (!res.ok) return res;
+  }
+
+  // se terminou o ciclo, cria outro
+  if (room.nota.turnIndex >= room.nota.turnOrder.length) {
+    const res = notaStartNewCycle(roomId);
+    if (!res.ok) return res;
+  }
+
+  // escolhe próximo alvo online
+  const targetToken = notaPickNextOnlineTarget(room);
+  if (!targetToken) {
+    notaResetTurn(room);
+    emitNotaState(roomId);
+    return { ok: false, error: "Poucas pessoas online para continuar." };
+  }
+
+  // começa turno
+  room.nota.phase = "guessing";
+  room.nota.targetToken = targetToken;
+  room.nota.targetRating = Math.floor(Math.random() * 10) + 1; // 1..10
+  room.nota.guessesByToken = {};
+
+  // inicializa scores se necessário
+  if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
+
+  // envia segredo pro alvo
+  const targetSid = room.players[targetToken]?.socketId;
+  if (targetSid) {
+    io.to(targetSid).emit("notaSecret", {
+      rating: room.nota.targetRating,
+      targetName: room.players[targetToken]?.name || "Jogador",
+    });
+  }
+
+  // envia prompt pros outros
+  const targetName = room.players[targetToken]?.name || "Jogador";
+  Object.keys(room.players).forEach((t) => {
+    const sid = room.players[t]?.socketId;
+    if (!sid) return;
+
+    // só participantes do ciclo
+    if (!room.nota.active.has(t)) return;
+
+    if (t !== targetToken) {
+      io.to(sid).emit("notaPromptGuess", { targetName });
+    }
+  });
+
+  io.to(roomId).emit("notaTurnStarted", { targetName });
+
+  emitNotaState(roomId);
+  return { ok: true };
+}
+
+function notaReveal(roomId) {
+  const room = rooms[roomId];
+  if (!room) return { ok: false, error: "Sala inválida." };
+  ensureNota(room);
+
+  if (room.nota.phase !== "guessing") return { ok: false, error: "Nenhum turno em andamento." };
+  const targetToken = room.nota.targetToken;
+  const rating = room.nota.targetRating;
+
+  if (!targetToken || !rating) return { ok: false, error: "Estado inválido do turno." };
+
+  // conta acertos
+  const guesses = [];
+  let hits = 0;
+
+  for (const t of Object.keys(room.nota.guessesByToken)) {
+    if (!room.nota.active.has(t)) continue; // já saiu do ciclo
+    const g = room.nota.guessesByToken[t];
+    if (typeof g !== "number") continue;
+
+    const name = room.players[t]?.name || "(desconectado)";
+    guesses.push({ token: t, name, guess: g, hit: g === rating });
+
+    if (g === rating) hits += 1;
+  }
+
+  // ✅ pontuação (Opção B)
+  // quem acertou: +1
+  guesses.forEach(x => {
+    if (x.hit) {
+      if (room.nota.scores[x.token] == null) room.nota.scores[x.token] = 0;
+      room.nota.scores[x.token] += 1;
+    }
+  });
+
+  // alvo: 1 + acertos
+  if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
+  room.nota.scores[targetToken] += (1 + hits);
+
+  room.nota.phase = "revealed";
+
+  const targetName = room.players[targetToken]?.name || "(desconectado)";
+
+  io.to(roomId).emit("notaRevealed", {
+    targetToken,
+    targetName,
+    rating,
+    hits,
+    guesses: guesses.sort((a, b) => a.name.localeCompare(b.name)),
+    addedToTarget: 1 + hits,
+  });
+
+  emitNotaState(roomId);
+  return { ok: true };
+}
+
+function notaNextTurn(roomId) {
+  const room = rooms[roomId];
+  if (!room) return { ok: false, error: "Sala inválida." };
+  ensureNota(room);
+
+  // avança índice do ciclo (o alvo atual já foi)
+  room.nota.turnIndex += 1;
+  notaResetTurn(room);
+
+  // tenta começar o próximo imediatamente
+  return notaStartTurn(roomId);
+}
+
+function emitNotaState(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+  ensureNota(room);
+
+  // placar (só players existentes)
+  const scoreboard = Object.keys(room.players).map(t => ({
+    token: t,
+    name: room.players[t]?.name || "Jogador",
+    points: room.nota.scores[t] || 0,
+    online: !!room.players[t]?.online,
+  })).sort((a, b) => b.points - a.points);
+
+  const submitted = {};
+  Object.keys(room.nota.guessesByToken).forEach(t => {
+    submitted[t] = true;
+  });
+
+  const activeNames = Array.from(room.nota.active || []).map(t => room.players[t]?.name).filter(Boolean);
+
+  io.to(roomId).emit("notaState", {
+    phase: room.nota.phase,
+    cycleId: room.nota.cycleId,
+    activeNames,
+    turnIndex: room.nota.turnIndex,
+    turnOrderNames: (room.nota.turnOrder || []).map(t => room.players[t]?.name).filter(Boolean),
+    targetToken: room.nota.targetToken,
+    targetName: room.nota.targetToken ? (room.players[room.nota.targetToken]?.name || "Jogador") : null,
+    submitted,
+    scoreboard,
+  });
+}
+
+function notaHandlePlayerRemoved(roomId, token) {
+  const room = rooms[roomId];
+  if (!room || !room.nota) return;
+
+  // remove do ciclo e da ordem
+  room.nota.active.delete(token);
+  room.nota.turnOrder = (room.nota.turnOrder || []).filter(t => t !== token);
+  delete room.nota.guessesByToken[token];
+  delete room.nota.scores[token];
+
+  // se ficou menos de 2 no ciclo, volta pra lobby
+  if (room.nota.active.size < 2 || room.nota.turnOrder.length < 2) {
+    notaResetTurn(room);
+    emitNotaState(roomId);
+    io.to(roomId).emit("notaTurnCancelled", "Poucas pessoas online/na sala. Turno cancelado.");
+    return;
+  }
+
+  // se o removido era o alvo e o turno estava rolando, passa pro próximo automaticamente
+  if (room.nota.phase === "guessing" && room.nota.targetToken === token) {
+    io.to(roomId).emit("notaTargetLeft", "O alvo saiu/desconectou. Pulando para o próximo...");
+    // garante que o índice do ciclo avance (o alvo perdeu a vez)
+    room.nota.turnIndex += 1;
+    notaResetTurn(room);
+    // tenta iniciar próximo
+    notaStartTurn(roomId);
+    return;
+  }
+
+  emitNotaState(roomId);
+}
+
 /* ------------------ SOCKETS ------------------ */
 
 io.on("connection", (socket) => {
@@ -767,6 +1040,7 @@ io.on("connection", (socket) => {
       qse: null,
       spy: null,
       infiltrado: null,
+      nota: null, // ✅ novo
     };
 
     rooms[roomId].players[playerToken] = {
@@ -798,6 +1072,10 @@ io.on("connection", (socket) => {
     if (gt === "infiltrado") {
       ensureInfiltrado(rooms[roomId]);
       emitInfiltradoState(roomId);
+    }
+    if (gt === "e-a-nota-e") {
+      ensureNota(rooms[roomId]);
+      emitNotaState(roomId);
     }
   });
 
@@ -859,11 +1137,7 @@ io.on("connection", (socket) => {
       socket.emit("master");
     }
 
-    socket.emit("joinedRoom", {
-      roomId,
-      gameType: room.gameType,
-      sessionKey: room.sessions[playerToken],
-    });
+    socket.emit("joinedRoom", { roomId, gameType: room.gameType, sessionKey: room.sessions[playerToken] });
 
     emitPlayersUpdate(roomId);
 
@@ -884,9 +1158,7 @@ io.on("connection", (socket) => {
         io.to(socket.id).emit("qseOthersCharacters", list);
 
         if (room.qse.revealedToTarget[playerToken]) {
-          io.to(socket.id).emit("qseYourCharacter", {
-            character: room.qse.characterByTarget[playerToken],
-          });
+          io.to(socket.id).emit("qseYourCharacter", { character: room.qse.characterByTarget[playerToken] });
         }
       }
     }
@@ -907,7 +1179,6 @@ io.on("connection", (socket) => {
 
       if (room.infiltrado.phase !== "lobby" && room.infiltrado.active.has(playerToken)) {
         const isInf = playerToken === room.infiltrado.infiltradoToken;
-
         if (isInf) {
           io.to(socket.id).emit("infiltradoSecret", {
             role: "infiltrado",
@@ -928,9 +1199,24 @@ io.on("connection", (socket) => {
           const order = (room.infiltrado.orderByRound[r] || [])
             .map((t) => room.players[t]?.name)
             .filter(Boolean);
-
           io.to(socket.id).emit("infiltradoRound", { round: r, question: q, order });
         }
+      }
+    }
+
+    if (room.gameType === "e-a-nota-e") {
+      ensureNota(room);
+      emitNotaState(roomId);
+
+      // Se estiver rolando turno, reenvia o papel do usuário
+      if (room.nota.phase === "guessing" && room.nota.targetToken === playerToken) {
+        io.to(socket.id).emit("notaSecret", {
+          rating: room.nota.targetRating,
+          targetName: room.players[playerToken]?.name || "Jogador",
+        });
+      } else if (room.nota.phase === "guessing" && room.nota.targetToken && room.nota.active.has(playerToken)) {
+        const targetName = room.players[room.nota.targetToken]?.name || "Jogador";
+        io.to(socket.id).emit("notaPromptGuess", { targetName });
       }
     }
   });
@@ -1004,11 +1290,11 @@ io.on("connection", (socket) => {
     const callerToken = getCallerToken(room, socket.id);
     if (!callerToken || callerToken !== room.masterToken) return;
 
-    // ✅ avisa UI pra limpar revelação anterior (igual o ITO)
-    io.to(roomId).emit("qseNewRound");
-
     ensureQse(room);
     qseResetRound(room);
+
+    // ✅ limpa a UI do "seu personagem" da rodada anterior
+    io.to(roomId).emit("qseNewRound");
 
     const tokens = Object.keys(room.players).filter((t) => room.players[t].online);
     if (tokens.length < 2) {
@@ -1441,6 +1727,97 @@ io.on("connection", (socket) => {
     emitInfiltradoState(roomId);
   });
 
+  /* ------------------ E A NOTA É... ------------------ */
+
+  socket.on("notaStartTurn", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "e-a-nota-e") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureNota(room);
+    const res = notaStartTurn(roomId);
+    if (!res.ok) socket.emit("errorMessage", res.error || "Não foi possível iniciar.");
+  });
+
+  socket.on("notaSubmitGuess", ({ roomId, guess }) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "e-a-nota-e") return;
+
+    const token = getCallerToken(room, socket.id);
+    if (!token) return;
+
+    ensureNota(room);
+
+    if (room.nota.phase !== "guessing") {
+      socket.emit("errorMessage", "Não estamos na fase de chute.");
+      return;
+    }
+
+    if (!room.nota.active.has(token)) {
+      socket.emit("errorMessage", "Você não está no ciclo atual.");
+      return;
+    }
+
+    if (token === room.nota.targetToken) {
+      socket.emit("errorMessage", "O alvo não pode chutar a própria nota.");
+      return;
+    }
+
+    const n = Number(guess);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      socket.emit("errorMessage", "Chute inválido. Use um número de 1 a 10.");
+      return;
+    }
+
+    room.nota.guessesByToken[token] = n;
+    socket.emit("notaGuessOK");
+    emitNotaState(roomId);
+  });
+
+  socket.on("notaReveal", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "e-a-nota-e") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureNota(room);
+    const res = notaReveal(roomId);
+    if (!res.ok) socket.emit("errorMessage", res.error || "Não foi possível revelar.");
+  });
+
+  socket.on("notaNextTurn", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "e-a-nota-e") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureNota(room);
+    const res = notaNextTurn(roomId);
+    if (!res.ok) socket.emit("errorMessage", res.error || "Não foi possível avançar.");
+  });
+
+  socket.on("notaResetScores", (roomId) => {
+    roomId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms[roomId];
+    if (!room || room.gameType !== "e-a-nota-e") return;
+
+    const callerToken = getCallerToken(room, socket.id);
+    if (!callerToken || callerToken !== room.masterToken) return;
+
+    ensureNota(room);
+    room.nota.scores = {};
+    emitNotaState(roomId);
+    io.to(roomId).emit("notaScoresReset");
+  });
+
   /* ------------------ sair / disconnect ------------------ */
 
   socket.on("leaveRoom", (roomId) => {
@@ -1457,6 +1834,9 @@ io.on("connection", (socket) => {
     }
 
     cancelPlayerRemoval(roomId, token);
+
+    // Ajusta jogos que dependem desse token
+    if (room.nota) notaHandlePlayerRemoved(roomId, token);
 
     delete room.players[token];
     delete room.sessions[token];
@@ -1486,6 +1866,7 @@ io.on("connection", (socket) => {
     if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
     if (room.gameType === "impostor") emitSpyState(roomId);
     if (room.gameType === "infiltrado") emitInfiltradoState(roomId);
+    if (room.gameType === "e-a-nota-e") emitNotaState(roomId);
 
     if (Object.keys(room.players).length === 0) {
       scheduleEmptyRoomDeletion(roomId);
@@ -1501,12 +1882,16 @@ io.on("connection", (socket) => {
       room.players[token].online = false;
       room.players[token].socketId = null;
 
+      // se for o jogo de nota e o cara é o alvo,
+      // a gente NÃO pula imediatamente — só pula quando for removido de fato (10 min)
+      // (isso evita pular turno por oscilação curta)
       schedulePlayerRemoval(roomId, token);
 
       emitPlayersUpdate(roomId);
       if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
       if (room.gameType === "impostor") emitSpyState(roomId);
       if (room.gameType === "infiltrado") emitInfiltradoState(roomId);
+      if (room.gameType === "e-a-nota-e") emitNotaState(roomId);
 
       if (Object.keys(room.players).length === 0) {
         scheduleEmptyRoomDeletion(roomId);
