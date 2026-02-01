@@ -319,7 +319,10 @@ function derangement(ids) {
     const perm = [...ids].sort(() => Math.random() - 0.5);
     let ok = true;
     for (let i = 0; i < n; i++) {
-      if (perm[i] === ids[i]) { ok = false; break; }
+      if (perm[i] === ids[i]) {
+        ok = false;
+        break;
+      }
     }
     if (ok) {
       const map = {};
@@ -406,7 +409,7 @@ const SPY_QUESTION_PAIRS = [
   { principal: "Coisas que distraem no trabalho ou estudo", paralela: "Coisas que te fazem perder o foco" },
   { principal: "Motivos comuns para procrastinar", paralela: "Coisas que fazem você procrastinar" },
   { principal: "Itens que todo mundo compra no mercado", paralela: "Itens que você sempre compra" },
-  { principal: "Coisas que você compraria se tivesse dinheiro", paralela: "Coisas que você gostaria de comprar" },
+  { principal: "Coisas que você compraria se tivesse dinheiro", paralela: "Coisas que você gostaria de ter" },
   { principal: "Coisas que todo mundo reclama", paralela: "Coisas que você reclama" },
   { principal: "Coisas que dão preguiça", paralela: "Coisas que você evita fazer" },
   { principal: "Coisas que deixam alguém com fome", paralela: "Coisas que te dão vontade de comer" },
@@ -856,7 +859,11 @@ io.on("connection", (socket) => {
       socket.emit("master");
     }
 
-    socket.emit("joinedRoom", { roomId, gameType: room.gameType, sessionKey: room.sessions[playerToken] });
+    socket.emit("joinedRoom", {
+      roomId,
+      gameType: room.gameType,
+      sessionKey: room.sessions[playerToken],
+    });
 
     emitPlayersUpdate(roomId);
 
@@ -877,7 +884,9 @@ io.on("connection", (socket) => {
         io.to(socket.id).emit("qseOthersCharacters", list);
 
         if (room.qse.revealedToTarget[playerToken]) {
-          io.to(socket.id).emit("qseYourCharacter", { character: room.qse.characterByTarget[playerToken] });
+          io.to(socket.id).emit("qseYourCharacter", {
+            character: room.qse.characterByTarget[playerToken],
+          });
         }
       }
     }
@@ -898,6 +907,7 @@ io.on("connection", (socket) => {
 
       if (room.infiltrado.phase !== "lobby" && room.infiltrado.active.has(playerToken)) {
         const isInf = playerToken === room.infiltrado.infiltradoToken;
+
         if (isInf) {
           io.to(socket.id).emit("infiltradoSecret", {
             role: "infiltrado",
@@ -918,6 +928,7 @@ io.on("connection", (socket) => {
           const order = (room.infiltrado.orderByRound[r] || [])
             .map((t) => room.players[t]?.name)
             .filter(Boolean);
+
           io.to(socket.id).emit("infiltradoRound", { round: r, question: q, order });
         }
       }
@@ -992,6 +1003,9 @@ io.on("connection", (socket) => {
 
     const callerToken = getCallerToken(room, socket.id);
     if (!callerToken || callerToken !== room.masterToken) return;
+
+    // ✅ avisa UI pra limpar revelação anterior (igual o ITO)
+    io.to(roomId).emit("qseNewRound");
 
     ensureQse(room);
     qseResetRound(room);
