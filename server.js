@@ -24,8 +24,7 @@ app.use(express.static("public"));
 const MAX_PLAYERS_PER_ROOM = 8;
 
 const EMPTY_ROOM_GRACE_MS = 60_000;
-// ✅ antes: 90s. Agora: 10 min
-const RECONNECT_GRACE_MS = 10 * 60_000;
+const RECONNECT_GRACE_MS = 10 * 60_000; // 10 min
 
 const rooms = {};
 // roomId -> {
@@ -41,7 +40,7 @@ const rooms = {};
 //   qse: {...}
 //   spy: {...}
 //   infiltrado: {...}
-//   nota: {...} // ✅ e a nota é...
+//   nota: {...}
 // }
 
 function generateRoomId() {
@@ -97,6 +96,33 @@ function emitPlayersUpdate(roomId) {
     masterToken: room.masterToken,
     gameType: room.gameType,
   });
+}
+
+/**
+ * ✅ NOVO: sincroniza quem é mestre de forma determinística.
+ * - Emite `masterState` (novo) para TODO MUNDO
+ * - Emite `master` (legado) APENAS para o mestre (para compatibilidade com páginas antigas)
+ */
+function emitMasterState(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  const masterToken = room.masterToken;
+
+  for (const token of Object.keys(room.players)) {
+    const sid = room.players[token]?.socketId;
+    if (!sid) continue;
+
+    const isMaster = !!masterToken && token === masterToken;
+
+    // evento novo (robusto)
+    io.to(sid).emit("masterState", { isMaster });
+
+    // evento antigo (compatibilidade) - só mestre recebe
+    if (isMaster) {
+      io.to(sid).emit("master");
+    }
+  }
 }
 
 function closeRoom(roomId) {
@@ -187,13 +213,12 @@ function schedulePlayerRemoval(roomId, token) {
       delete r.infiltrado.votesByVoter[token];
     }
 
+    // ✅ troca mestre se necessário
     if (r.masterToken === token) {
       const remaining = Object.keys(r.players);
       if (remaining.length) {
         const onlineFirst = remaining.find((t) => r.players[t].online) || remaining[0];
         r.masterToken = onlineFirst;
-        const sid = r.players[onlineFirst].socketId;
-        if (sid) io.to(sid).emit("master");
       } else {
         r.masterToken = null;
       }
@@ -204,6 +229,8 @@ function schedulePlayerRemoval(roomId, token) {
     }
 
     emitPlayersUpdate(roomId);
+    emitMasterState(roomId);
+
     if (r.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
     if (r.gameType === "impostor") emitSpyState(roomId);
     if (r.gameType === "infiltrado") emitInfiltradoState(roomId);
@@ -264,19 +291,20 @@ function kickPlayer(roomId, token, reason = "Você foi expulso pelo mestre.") {
     delete room.infiltrado.votesByVoter[token];
   }
 
+  // ✅ troca mestre se necessário
   if (room.masterToken === token) {
     const remaining = Object.keys(room.players);
     if (remaining.length) {
       const onlineFirst = remaining.find((t) => room.players[t].online) || remaining[0];
       room.masterToken = onlineFirst;
-      const sid = room.players[onlineFirst].socketId;
-      if (sid) io.to(sid).emit("master");
     } else {
       room.masterToken = null;
     }
   }
 
   emitPlayersUpdate(roomId);
+  emitMasterState(roomId);
+
   if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
   if (room.gameType === "impostor") emitSpyState(roomId);
   if (room.gameType === "infiltrado") emitInfiltradoState(roomId);
@@ -737,18 +765,25 @@ function ensureNota(room) {
   if (!room.nota) {
     room.nota = {
       phase: "lobby", // lobby | guessing | revealed
-      active: new Set(), // tokens do ciclo atual
-      turnOrder: [],     // ordem do ciclo
+      active: new Set(),
+      turnOrder: [],
       turnIndex: 0,
 
       targetToken: null,
       targetRating: null,
 
-      guessesByToken: {}, // token -> 1..10
-      scores: {},         // token -> pontos (persistente enquanto sala existir)
+      guessesByToken: {},
+      scores: {},
 
       cycleId: 0,
     };
+  }
+}
+
+function notaEnsureScores(room) {
+  ensureNota(room);
+  for (const t of Object.keys(room.players)) {
+    if (room.nota.scores[t] == null) room.nota.scores[t] = 0;
   }
 }
 
@@ -770,12 +805,11 @@ function notaStartNewCycle(roomId) {
 
   room.nota.cycleId += 1;
   room.nota.active = new Set(tokens);
-  room.nota.turnOrder = shuffle(tokens); // ✅ aleatório no início do ciclo
+  room.nota.turnOrder = shuffle(tokens);
   room.nota.turnIndex = 0;
-  notaResetTurn(room);
 
-  // garante scores inicializados
-  tokens.forEach(t => { if (room.nota.scores[t] == null) room.nota.scores[t] = 0; });
+  notaEnsureScores(room);
+  notaResetTurn(room);
 
   io.to(roomId).emit("notaCycleStarted", {
     cycleId: room.nota.cycleId,
@@ -798,45 +832,26 @@ function notaPickNextOnlineTarget(room) {
   return null;
 }
 
-function notaSendSecretToTarget(roomId) {
-  const room = rooms[roomId];
-  if (!room || !room.nota) return;
-  if (room.nota.phase !== "guessing") return;
-
-  const targetToken = room.nota.targetToken;
-  const rating = room.nota.targetRating;
-
-  if (!targetToken || !rating) return;
-
-  const sid = room.players[targetToken]?.socketId;
-  if (!sid) return;
-
-  // ✅ manda em duplicidade de nomes: rating + number
-  io.to(sid).emit("notaSecret", {
-    rating,
-    number: rating,
-    targetName: room.players[targetToken]?.name || "Jogador",
-  });
-}
-
 function notaStartTurn(roomId) {
   const room = rooms[roomId];
   if (!room) return { ok: false, error: "Sala inválida." };
   ensureNota(room);
 
-  // se não tem ciclo, cria um
+  const onlineTokens = Object.keys(room.players).filter(t => room.players[t]?.online);
+  if (onlineTokens.length < 2) return { ok: false, error: "Precisa de pelo menos 2 jogadores online para iniciar." };
+
+  // cria ciclo se necessário
   if (!room.nota.turnOrder.length || room.nota.active.size < 2) {
     const res = notaStartNewCycle(roomId);
     if (!res.ok) return res;
   }
 
-  // se terminou o ciclo, cria outro
+  // terminou ciclo => cria outro
   if (room.nota.turnIndex >= room.nota.turnOrder.length) {
     const res = notaStartNewCycle(roomId);
     if (!res.ok) return res;
   }
 
-  // escolhe próximo alvo online
   const targetToken = notaPickNextOnlineTarget(room);
   if (!targetToken) {
     notaResetTurn(room);
@@ -846,27 +861,31 @@ function notaStartTurn(roomId) {
 
   room.nota.phase = "guessing";
   room.nota.targetToken = targetToken;
-  room.nota.targetRating = Math.floor(Math.random() * 10) + 1; // 1..10
+  room.nota.targetRating = Math.floor(Math.random() * 10) + 1;
   room.nota.guessesByToken = {};
 
-  if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
+  notaEnsureScores(room);
 
-  // ✅ garante que o alvo receba a nota (e a UI não dependa só do primeiro disparo)
-  notaSendSecretToTarget(roomId);
+  const targetSid = room.players[targetToken]?.socketId;
+  if (targetSid) {
+    io.to(targetSid).emit("notaSecret", {
+      rating: room.nota.targetRating,
+      targetName: room.players[targetToken]?.name || "Jogador",
+    });
+  }
 
-  // envia prompt pros outros (participantes do ciclo)
   const targetName = room.players[targetToken]?.name || "Jogador";
-  Object.keys(room.players).forEach((t) => {
+  for (const t of Object.keys(room.players)) {
     const sid = room.players[t]?.socketId;
-    if (!sid) return;
-    if (!room.nota.active.has(t)) return;
-    if (t === targetToken) return;
+    if (!sid) continue;
+    if (!room.nota.active.has(t)) continue;
 
-    io.to(sid).emit("notaPromptGuess", { targetName });
-  });
+    if (t !== targetToken) {
+      io.to(sid).emit("notaPromptGuess", { targetName });
+    }
+  }
 
   io.to(roomId).emit("notaTurnStarted", { targetName });
-
   emitNotaState(roomId);
   return { ok: true };
 }
@@ -882,6 +901,8 @@ function notaReveal(roomId) {
 
   if (!targetToken || !rating) return { ok: false, error: "Estado inválido do turno." };
 
+  notaEnsureScores(room);
+
   const guesses = [];
   let hits = 0;
 
@@ -891,21 +912,20 @@ function notaReveal(roomId) {
     if (typeof g !== "number") continue;
 
     const name = room.players[t]?.name || "(desconectado)";
-    guesses.push({ token: t, name, guess: g, hit: g === rating });
+    const hit = g === rating;
+    guesses.push({ token: t, name, guess: g, hit });
 
-    if (g === rating) hits += 1;
+    if (hit) hits += 1;
   }
 
-  // ✅ pontuação (Opção B)
-  guesses.forEach(x => {
-    if (x.hit) {
-      if (room.nota.scores[x.token] == null) room.nota.scores[x.token] = 0;
-      room.nota.scores[x.token] += 1;
-    }
-  });
+  // ✅ Opção B:
+  // quem acertou: +1
+  for (const x of guesses) {
+    if (x.hit) room.nota.scores[x.token] = (room.nota.scores[x.token] || 0) + 1;
+  }
 
-  if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
-  room.nota.scores[targetToken] += (1 + hits);
+  // alvo: + (1 + acertos)
+  room.nota.scores[targetToken] = (room.nota.scores[targetToken] || 0) + (1 + hits);
 
   room.nota.phase = "revealed";
 
@@ -915,7 +935,6 @@ function notaReveal(roomId) {
     targetToken,
     targetName,
     rating,
-    number: rating, // ✅ compat
     hits,
     guesses: guesses.sort((a, b) => a.name.localeCompare(b.name)),
     addedToTarget: 1 + hits,
@@ -932,7 +951,6 @@ function notaNextTurn(roomId) {
 
   room.nota.turnIndex += 1;
   notaResetTurn(room);
-
   return notaStartTurn(roomId);
 }
 
@@ -940,6 +958,8 @@ function emitNotaState(roomId) {
   const room = rooms[roomId];
   if (!room) return;
   ensureNota(room);
+
+  notaEnsureScores(room);
 
   const scoreboard = Object.keys(room.players).map(t => ({
     token: t,
@@ -949,7 +969,9 @@ function emitNotaState(roomId) {
   })).sort((a, b) => b.points - a.points);
 
   const submitted = {};
-  Object.keys(room.nota.guessesByToken).forEach(t => { submitted[t] = true; });
+  for (const t of Object.keys(room.nota.guessesByToken || {})) {
+    submitted[t] = true;
+  }
 
   const activeNames = Array.from(room.nota.active || [])
     .map(t => room.players[t]?.name)
@@ -960,16 +982,16 @@ function emitNotaState(roomId) {
     cycleId: room.nota.cycleId,
     activeNames,
     turnIndex: room.nota.turnIndex,
-    turnOrderNames: (room.nota.turnOrder || []).map(t => room.players[t]?.name).filter(Boolean),
+    turnOrderNames: (room.nota.turnOrder || [])
+      .map(t => room.players[t]?.name)
+      .filter(Boolean),
+
     targetToken: room.nota.targetToken,
     targetName: room.nota.targetToken ? (room.players[room.nota.targetToken]?.name || "Jogador") : null,
+
     submitted,
     scoreboard,
   });
-
-  // ✅ importante: re-garante o segredo pro alvo
-  // (sem vazar pros outros)
-  notaSendSecretToTarget(roomId);
 }
 
 function notaHandlePlayerRemoved(roomId, token) {
@@ -979,8 +1001,11 @@ function notaHandlePlayerRemoved(roomId, token) {
   room.nota.active.delete(token);
   room.nota.turnOrder = (room.nota.turnOrder || []).filter(t => t !== token);
   delete room.nota.guessesByToken[token];
+
+  // (placar persistente só enquanto está na sala)
   delete room.nota.scores[token];
 
+  // se ficou menos de 2 no ciclo, cancela turno
   if (room.nota.active.size < 2 || room.nota.turnOrder.length < 2) {
     notaResetTurn(room);
     emitNotaState(roomId);
@@ -988,6 +1013,7 @@ function notaHandlePlayerRemoved(roomId, token) {
     return;
   }
 
+  // se removido era alvo durante guessing, pula imediatamente
   if (room.nota.phase === "guessing" && room.nota.targetToken === token) {
     io.to(roomId).emit("notaTargetLeft", "O alvo saiu/desconectou. Pulando para o próximo...");
     room.nota.turnIndex += 1;
@@ -1058,10 +1084,10 @@ io.on("connection", (socket) => {
 
     socket.join(roomId);
 
-    socket.emit("master");
     socket.emit("roomCreated", { roomId, gameType: gt, sessionKey });
 
     emitPlayersUpdate(roomId);
+    emitMasterState(roomId);
 
     if (gt === "quem-sou-eu") {
       ensureQse(rooms[roomId]);
@@ -1132,17 +1158,15 @@ io.on("connection", (socket) => {
 
     socket.join(roomId);
 
+    // ✅ se por algum motivo não há mestre (deveria ser raro), define um
     if (!room.masterToken) {
       room.masterToken = playerToken;
-      socket.emit("master");
-    }
-    if (room.masterToken === playerToken) {
-      socket.emit("master");
     }
 
     socket.emit("joinedRoom", { roomId, gameType: room.gameType, sessionKey: room.sessions[playerToken] });
 
     emitPlayersUpdate(roomId);
+    emitMasterState(roomId);
 
     if (room.gameType === "quem-sou-eu") {
       ensureQse(room);
@@ -1209,11 +1233,14 @@ io.on("connection", (socket) => {
 
     if (room.gameType === "e-a-nota-e") {
       ensureNota(room);
+      notaEnsureScores(room);
       emitNotaState(roomId);
 
-      // ✅ reforço: se ele é o alvo no turno atual, manda o segredo (rating+number)
       if (room.nota.phase === "guessing" && room.nota.targetToken === playerToken) {
-        notaSendSecretToTarget(roomId);
+        io.to(socket.id).emit("notaSecret", {
+          rating: room.nota.targetRating,
+          targetName: room.players[playerToken]?.name || "Jogador",
+        });
       } else if (room.nota.phase === "guessing" && room.nota.targetToken && room.nota.active.has(playerToken)) {
         const targetName = room.players[room.nota.targetToken]?.name || "Jogador";
         io.to(socket.id).emit("notaPromptGuess", { targetName });
@@ -1812,6 +1839,7 @@ io.on("connection", (socket) => {
 
     ensureNota(room);
     room.nota.scores = {};
+    notaEnsureScores(room);
     emitNotaState(roomId);
     io.to(roomId).emit("notaScoresReset");
   });
@@ -1860,6 +1888,8 @@ io.on("connection", (socket) => {
     socket.leave(roomId);
 
     emitPlayersUpdate(roomId);
+    emitMasterState(roomId);
+
     if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
     if (room.gameType === "impostor") emitSpyState(roomId);
     if (room.gameType === "infiltrado") emitInfiltradoState(roomId);
@@ -1882,6 +1912,8 @@ io.on("connection", (socket) => {
       schedulePlayerRemoval(roomId, token);
 
       emitPlayersUpdate(roomId);
+      emitMasterState(roomId);
+
       if (room.gameType === "quem-sou-eu") emitQseWritingStatus(roomId);
       if (room.gameType === "impostor") emitSpyState(roomId);
       if (room.gameType === "infiltrado") emitInfiltradoState(roomId);
