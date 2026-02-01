@@ -44,7 +44,6 @@
       box-shadow: 0 0 0 2px rgba(255,77,77,.15);
     }
 
-    /* Botões 1-10 */
     .grid10{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
     @media (max-width:720px){ .grid10{grid-template-columns:repeat(2,1fr);} }
     .numBtn{padding:14px;font-weight:900;font-size:18px}
@@ -127,11 +126,26 @@
       return u.searchParams.get(name) || "";
     }
 
-    function setPressed(btn, type = "normal") {
+    // scope: "guess" | "master" | "all"
+    function clearPressed(scope="all"){
+      if (scope === "guess" || scope === "all") {
+        document.querySelectorAll(".numBtn").forEach(b => {
+          b.classList.remove("pressed", "good-pressed", "bad-pressed");
+        });
+      }
+      if (scope === "master" || scope === "all") {
+        document.querySelectorAll("#masterControls button").forEach(b => {
+          b.classList.remove("pressed", "good-pressed", "bad-pressed");
+        });
+      }
+      if (scope === "all") {
+        document.getElementById("btnLeave").classList.remove("pressed", "good-pressed", "bad-pressed");
+      }
+    }
+
+    function setPressed(btn, type="normal", scope="all") {
       if (!btn) return;
-      document.querySelectorAll("#masterControls button, #btnLeave, .numBtn").forEach(b => {
-        b.classList.remove("pressed", "good-pressed", "bad-pressed");
-      });
+      clearPressed(scope);
       if (type === "good") btn.classList.add("good-pressed");
       else if (type === "bad") btn.classList.add("bad-pressed");
       else btn.classList.add("pressed");
@@ -145,7 +159,6 @@
     document.getElementById("roomCode").textContent = roomId || "------";
     document.getElementById("subtitle").textContent = nickname ? `Você: ${nickname}` : "—";
 
-    // entra por sessionKey (igual seus outros jogos)
     socket.emit("joinRoom", {
       roomId,
       password: "",
@@ -159,7 +172,13 @@
     let lastState = null;
     let myGuess = null;
 
-    function renderPlayers(list, masterToken){
+    function toggleMasterUI(){
+      document.getElementById("masterControls").hidden = !isMaster;
+      document.getElementById("kickHint").hidden = !isMaster;
+      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
+    }
+
+    function renderPlayers(list){
       const wrap = document.getElementById("players");
       wrap.innerHTML = "";
       playersCache = list;
@@ -191,26 +210,30 @@
     const btnLeave = document.getElementById("btnLeave");
 
     btnStart.onclick = () => {
-      setPressed(btnStart);
+      if (!isMaster) return;
+      setPressed(btnStart, "normal", "master");
       socket.emit("notaStartTurn", roomId);
     };
     btnReveal.onclick = () => {
-      setPressed(btnReveal, "bad");
+      if (!isMaster) return;
+      setPressed(btnReveal, "bad", "master");
       socket.emit("notaReveal", roomId);
     };
     btnNext.onclick = () => {
-      setPressed(btnNext);
+      if (!isMaster) return;
+      setPressed(btnNext, "normal", "master");
       socket.emit("notaNextTurn", roomId);
     };
     btnResetScores.onclick = () => {
+      if (!isMaster) return;
       const ok = confirm("Zerar placar?");
       if (!ok) return;
-      setPressed(btnResetScores, "bad");
+      setPressed(btnResetScores, "bad", "master");
       socket.emit("notaResetScores", roomId);
     };
 
     btnLeave.onclick = () => {
-      setPressed(btnLeave, "bad");
+      setPressed(btnLeave, "bad", "all");
       socket.emit("leaveRoom", roomId);
       window.location.href = "/";
     };
@@ -223,7 +246,7 @@
       b.textContent = String(n);
       b.onclick = () => {
         myGuess = n;
-        setPressed(b, "good");
+        setPressed(b, "good", "guess");
         socket.emit("notaSubmitGuess", { roomId, guess: n });
       };
       grid.appendChild(b);
@@ -271,22 +294,20 @@
     // Eventos gerais
     socket.on("errorMessage", (m) => alert(m));
 
+    // ⚠️ Não confia só nisso para ser mestre.
     socket.on("master", () => {
-      isMaster = true;
-      document.getElementById("rolePill").textContent = "mestre 👑";
-      document.getElementById("masterControls").hidden = false;
-      document.getElementById("kickHint").hidden = false;
-
-      if (playersCache.length) {
-        const masterToken = playersCache.find(p => p.isMaster)?.token;
-        renderPlayers(playersCache, masterToken);
-      }
+      // deixa o playersUpdate decidir de fato
+      // (isso evita jogador "virar mestre" por bug/timing)
     });
 
     socket.on("playersUpdate", ({ players, masterToken, gameType }) => {
       if (gameType && gameType !== "e-a-nota-e") return;
-      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
-      renderPlayers(players, masterToken);
+
+      // ✅ fonte da verdade
+      isMaster = (masterToken && playerToken && masterToken === playerToken);
+
+      toggleMasterUI();
+      renderPlayers(players);
     });
 
     socket.on("roomClosed", () => {
@@ -308,15 +329,11 @@
 
       renderScoreboard(state.scoreboard);
 
-      // UI do turno
       const turnLine = document.getElementById("turnLine");
       const bigBox = document.getElementById("bigBox");
       const guessStatus = document.getElementById("guessStatus");
 
-      // limpa resultado se mudar de fase
-      if (phase !== "revealed") {
-        showRevealUI(false);
-      }
+      if (phase !== "revealed") showRevealUI(false);
 
       if (phase === "lobby") {
         showGuessUI(false);
@@ -332,7 +349,6 @@
         if (meIsTarget) {
           showGuessUI(false);
           turnLine.textContent = `Você é o alvo desta vez.`;
-          // o número vem por notaSecret (evento separado)
           bigBox.textContent = "Sua nota está na sua tela ✅";
         } else {
           showGuessUI(true);
@@ -350,14 +366,19 @@
       }
     });
 
-    // ✅ Segredo do alvo
-    socket.on("notaSecret", ({ rating }) => {
+    // ✅ Segredo do alvo (aceita rating OU number)
+    socket.on("notaSecret", (payload) => {
+      const rating = Number(payload?.rating ?? payload?.number);
+      if (!Number.isInteger(rating)) return;
+
+      // só deve aparecer pro alvo (mas se o state ainda não chegou, deixa aparecer)
+      if (lastState && !isMeTarget(lastState)) return;
+
       const bigBox = document.getElementById("bigBox");
       bigBox.textContent = `SUA NOTA: ${rating}`;
     });
 
     socket.on("notaPromptGuess", ({ targetName }) => {
-      // só melhora UX: se estiver na fase de chute, mostra o nome
       const turnLine = document.getElementById("turnLine");
       if (lastState?.phase === "guessing") {
         turnLine.textContent = `Chute a nota de: ${targetName || "Jogador"}`;
@@ -369,21 +390,19 @@
     });
 
     socket.on("notaTurnStarted", ({ targetName }) => {
-      // limpa seleção visual de botões 1-10
-      document.querySelectorAll(".numBtn").forEach(b => {
-        b.classList.remove("pressed", "good-pressed", "bad-pressed");
-      });
+      clearPressed("guess");
       document.getElementById("guessStatus").textContent = "";
       document.getElementById("revealLine1").textContent = "—";
       document.getElementById("revealLine2").textContent = "";
       document.getElementById("guessList").innerHTML = "";
     });
 
-    socket.on("notaRevealed", ({ targetName, rating, hits, guesses, addedToTarget }) => {
+    socket.on("notaRevealed", ({ targetName, rating, number, hits, guesses, addedToTarget }) => {
       showRevealUI(true);
+      const r = Number(rating ?? number);
 
       document.getElementById("revealLine1").textContent =
-        `${targetName} recebeu: ${rating}`;
+        `${targetName} recebeu: ${r}`;
 
       document.getElementById("revealLine2").textContent =
         `Acertos: ${hits}. (+${addedToTarget} pro alvo)`;
@@ -408,11 +427,6 @@
 
     socket.on("notaScoresReset", () => {
       alert("Placar zerado.");
-    });
-
-    socket.on("notaCycleStarted", ({ order }) => {
-      // opcional: só feedback
-      // console.log("Novo ciclo:", order);
     });
   </script>
 </body>
