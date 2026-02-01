@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>E a nota é...</title>
+  <style>
+    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:18px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0;text-align:left}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:180px}
+    button{
+      width:100%;box-sizing:border-box;padding:12px;border-radius:10px;
+      border:1px solid #333;background:#1f1f1f;color:#fff;font-size:16px
+    }
+    button{cursor:pointer}
+    button:hover{background:#2a2a2a}
+    .muted{color:#aaa;font-size:13px;line-height:1.4}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid #333;border-radius:999px;font-size:12px;color:#aaa;margin-left:6px}
+    .players{display:flex;flex-wrap:wrap;gap:8px}
+    .p{border:1px solid #333;border-radius:999px;padding:6px 10px;font-size:13px}
+    .p.master{border-color:#f1c40f}
+    .p.off{opacity:.55}
+    .title{font-size:18px;font-weight:800;margin:0 0 6px 0}
+    .big{font-size:22px;font-weight:900}
+    .center{text-align:center}
+    .hidden{display:none !important}
+
+    /* ✅ feedback botão clicado (contorno) */
+    button.pressed{
+      outline: 2px solid #7a5cff;
+      border-color: #7a5cff !important;
+      box-shadow: 0 0 0 2px rgba(122,92,255,.15);
+    }
+    button.good-pressed{
+      outline: 2px solid #2ecc71;
+      border-color: #2ecc71 !important;
+      box-shadow: 0 0 0 2px rgba(46,204,113,.15);
+    }
+    button.bad-pressed{
+      outline: 2px solid #ff4d4d;
+      border-color: #ff4d4d !important;
+      box-shadow: 0 0 0 2px rgba(255,77,77,.15);
+    }
+
+    /* Botões 1-10 */
+    .grid10{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+    @media (max-width:720px){ .grid10{grid-template-columns:repeat(2,1fr);} }
+    .numBtn{padding:14px;font-weight:900;font-size:18px}
+
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #1a1a1a;padding:10px;text-align:left;font-size:14px}
+    th{color:#aaa;font-weight:700}
+    .right{text-align:right}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 style="margin:6px 0 0 0;">E A NOTA É...</h1>
+    <div class="muted" id="subtitle">Carregando…</div>
+
+    <div class="card">
+      <div class="title">Sala</div>
+      <div class="muted">
+        Código: <b id="roomCode">------</b>
+        <span class="pill" id="rolePill">conectando…</span>
+        <span class="pill" id="phasePill">fase: lobby</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="title">Jogadores</div>
+      <div class="players" id="players"></div>
+
+      <div class="row" style="margin-top:12px;" id="masterControls" hidden>
+        <button id="btnStart">Iniciar turno</button>
+        <button id="btnReveal">Revelar</button>
+        <button id="btnNext">Próximo turno</button>
+        <button id="btnResetScores">Zerar placar</button>
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <button id="btnLeave">Sair</button>
+      </div>
+
+      <div class="muted" style="margin-top:10px" id="kickHint" hidden>
+        Clique em um jogador para expulsar (só o mestre).
+      </div>
+    </div>
+
+    <div class="card" id="scoreCard">
+      <div class="title">Placar</div>
+      <div class="muted" style="margin-bottom:8px;">Quem acertar ganha +1. O alvo ganha 1 + acertos.</div>
+      <div id="scoreTableWrap"></div>
+    </div>
+
+    <div class="card" id="turnCard">
+      <div class="title">Turno</div>
+
+      <div class="center">
+        <div class="muted" id="turnLine">Aguardando o mestre iniciar…</div>
+        <div class="big" id="bigBox" style="margin-top:10px;">—</div>
+      </div>
+
+      <div id="guessUI" class="hidden" style="margin-top:14px;">
+        <div class="muted center" style="margin-bottom:10px;">Escolha sua nota:</div>
+        <div class="grid10" id="gridBtns"></div>
+        <div class="muted center" id="guessStatus" style="margin-top:10px;"></div>
+      </div>
+
+      <div id="revealUI" class="hidden" style="margin-top:14px;">
+        <div class="title">Resultado</div>
+        <div class="big" id="revealLine1">—</div>
+        <div class="muted" id="revealLine2" style="margin-top:8px;"></div>
+        <div id="guessList" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    function qs(name){
+      const u = new URL(location.href);
+      return u.searchParams.get(name) || "";
+    }
+
+    function setPressed(btn, type = "normal") {
+      if (!btn) return;
+      document.querySelectorAll("#masterControls button, #btnLeave, .numBtn").forEach(b => {
+        b.classList.remove("pressed", "good-pressed", "bad-pressed");
+      });
+      if (type === "good") btn.classList.add("good-pressed");
+      else if (type === "bad") btn.classList.add("bad-pressed");
+      else btn.classList.add("pressed");
+    }
+
+    const roomId = qs("room").toUpperCase();
+    const nickname = qs("name");
+    const playerToken = qs("token") || localStorage.getItem("tbr_player_token") || "";
+    const sessionKey = qs("sessionKey") || sessionStorage.getItem(`tbr_session_${roomId}`) || "";
+
+    document.getElementById("roomCode").textContent = roomId || "------";
+    document.getElementById("subtitle").textContent = nickname ? `Você: ${nickname}` : "—";
+
+    // entra por sessionKey (igual seus outros jogos)
+    socket.emit("joinRoom", {
+      roomId,
+      password: "",
+      playerName: nickname,
+      playerToken,
+      sessionKey
+    });
+
+    let isMaster = false;
+    let playersCache = [];
+    let lastState = null;
+    let myGuess = null;
+
+    function renderPlayers(list, masterToken){
+      const wrap = document.getElementById("players");
+      wrap.innerHTML = "";
+      playersCache = list;
+
+      list.forEach(p => {
+        const el = document.createElement("div");
+        el.className = "p" + (p.isMaster ? " master":"") + (p.online ? "" : " off");
+        el.textContent = p.name + (p.isMaster ? " 👑" : "") + (p.online ? "" : " (off)");
+
+        if (isMaster && !p.isMaster) {
+          el.style.cursor = "pointer";
+          el.title = "Clique para expulsar";
+          el.onclick = () => {
+            const ok = confirm(`Expulsar ${p.name}?`);
+            if (!ok) return;
+            socket.emit("kickPlayer", { roomId, targetToken: p.token });
+          };
+        }
+
+        wrap.appendChild(el);
+      });
+    }
+
+    // Botões mestre
+    const btnStart = document.getElementById("btnStart");
+    const btnReveal = document.getElementById("btnReveal");
+    const btnNext = document.getElementById("btnNext");
+    const btnResetScores = document.getElementById("btnResetScores");
+    const btnLeave = document.getElementById("btnLeave");
+
+    btnStart.onclick = () => {
+      setPressed(btnStart);
+      socket.emit("notaStartTurn", roomId);
+    };
+    btnReveal.onclick = () => {
+      setPressed(btnReveal, "bad");
+      socket.emit("notaReveal", roomId);
+    };
+    btnNext.onclick = () => {
+      setPressed(btnNext);
+      socket.emit("notaNextTurn", roomId);
+    };
+    btnResetScores.onclick = () => {
+      const ok = confirm("Zerar placar?");
+      if (!ok) return;
+      setPressed(btnResetScores, "bad");
+      socket.emit("notaResetScores", roomId);
+    };
+
+    btnLeave.onclick = () => {
+      setPressed(btnLeave, "bad");
+      socket.emit("leaveRoom", roomId);
+      window.location.href = "/";
+    };
+
+    // cria botões 1..10
+    const grid = document.getElementById("gridBtns");
+    for (let n = 1; n <= 10; n++) {
+      const b = document.createElement("button");
+      b.className = "numBtn";
+      b.textContent = String(n);
+      b.onclick = () => {
+        myGuess = n;
+        setPressed(b, "good");
+        socket.emit("notaSubmitGuess", { roomId, guess: n });
+      };
+      grid.appendChild(b);
+    }
+
+    function renderScoreboard(scoreboard){
+      const wrap = document.getElementById("scoreTableWrap");
+      if (!scoreboard || !scoreboard.length) {
+        wrap.innerHTML = `<div class="muted">Sem dados.</div>`;
+        return;
+      }
+      const rows = scoreboard.map((x, i) => `
+        <tr>
+          <td>${i+1}º</td>
+          <td>${x.name}${x.online ? "" : " <span class='muted'>(off)</span>"}</td>
+          <td class="right"><b>${x.points}</b></td>
+        </tr>
+      `).join("");
+      wrap.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Jogador</th>
+              <th class="right">Pontos</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function isMeTarget(state){
+      if (!state || !state.targetToken) return false;
+      return state.targetToken === playerToken;
+    }
+
+    function showGuessUI(show){
+      document.getElementById("guessUI").classList.toggle("hidden", !show);
+    }
+    function showRevealUI(show){
+      document.getElementById("revealUI").classList.toggle("hidden", !show);
+    }
+
+    // Eventos gerais
+    socket.on("errorMessage", (m) => alert(m));
+
+    socket.on("master", () => {
+      isMaster = true;
+      document.getElementById("rolePill").textContent = "mestre 👑";
+      document.getElementById("masterControls").hidden = false;
+      document.getElementById("kickHint").hidden = false;
+
+      if (playersCache.length) {
+        const masterToken = playersCache.find(p => p.isMaster)?.token;
+        renderPlayers(playersCache, masterToken);
+      }
+    });
+
+    socket.on("playersUpdate", ({ players, masterToken, gameType }) => {
+      if (gameType && gameType !== "e-a-nota-e") return;
+      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
+      renderPlayers(players, masterToken);
+    });
+
+    socket.on("roomClosed", () => {
+      alert("A sala foi fechada.");
+      window.location.href = "/";
+    });
+
+    socket.on("kicked", ({ reason }) => {
+      alert(reason || "Você foi expulso.");
+      window.location.href = "/";
+    });
+
+    // ✅ Estado do jogo
+    socket.on("notaState", (state) => {
+      lastState = state;
+
+      const phase = state?.phase || "lobby";
+      document.getElementById("phasePill").textContent = "fase: " + phase;
+
+      renderScoreboard(state.scoreboard);
+
+      // UI do turno
+      const turnLine = document.getElementById("turnLine");
+      const bigBox = document.getElementById("bigBox");
+      const guessStatus = document.getElementById("guessStatus");
+
+      // limpa resultado se mudar de fase
+      if (phase !== "revealed") {
+        showRevealUI(false);
+      }
+
+      if (phase === "lobby") {
+        showGuessUI(false);
+        turnLine.textContent = "Aguardando o mestre iniciar…";
+        bigBox.textContent = "—";
+        guessStatus.textContent = "";
+      }
+
+      if (phase === "guessing") {
+        const targetName = state.targetName || "Jogador";
+        const meIsTarget = isMeTarget(state);
+
+        if (meIsTarget) {
+          showGuessUI(false);
+          turnLine.textContent = `Você é o alvo desta vez.`;
+          // o número vem por notaSecret (evento separado)
+          bigBox.textContent = "Sua nota está na sua tela ✅";
+        } else {
+          showGuessUI(true);
+          turnLine.textContent = `Chute a nota de: ${targetName}`;
+          bigBox.textContent = "Escolha 1 a 10";
+          const already = !!state.submitted?.[playerToken];
+          guessStatus.textContent = already ? "Enviado ✅" : "Ainda não enviado…";
+        }
+      }
+
+      if (phase === "revealed") {
+        showGuessUI(false);
+        turnLine.textContent = "Resultado revelado.";
+        bigBox.textContent = "—";
+      }
+    });
+
+    // ✅ Segredo do alvo
+    socket.on("notaSecret", ({ rating }) => {
+      const bigBox = document.getElementById("bigBox");
+      bigBox.textContent = `SUA NOTA: ${rating}`;
+    });
+
+    socket.on("notaPromptGuess", ({ targetName }) => {
+      // só melhora UX: se estiver na fase de chute, mostra o nome
+      const turnLine = document.getElementById("turnLine");
+      if (lastState?.phase === "guessing") {
+        turnLine.textContent = `Chute a nota de: ${targetName || "Jogador"}`;
+      }
+    });
+
+    socket.on("notaGuessOK", () => {
+      document.getElementById("guessStatus").textContent = "Enviado ✅";
+    });
+
+    socket.on("notaTurnStarted", ({ targetName }) => {
+      // limpa seleção visual de botões 1-10
+      document.querySelectorAll(".numBtn").forEach(b => {
+        b.classList.remove("pressed", "good-pressed", "bad-pressed");
+      });
+      document.getElementById("guessStatus").textContent = "";
+      document.getElementById("revealLine1").textContent = "—";
+      document.getElementById("revealLine2").textContent = "";
+      document.getElementById("guessList").innerHTML = "";
+    });
+
+    socket.on("notaRevealed", ({ targetName, rating, hits, guesses, addedToTarget }) => {
+      showRevealUI(true);
+
+      document.getElementById("revealLine1").textContent =
+        `${targetName} recebeu: ${rating}`;
+
+      document.getElementById("revealLine2").textContent =
+        `Acertos: ${hits}. (+${addedToTarget} pro alvo)`;
+
+      const list = (guesses || []).map(g =>
+        `<div class="muted" style="padding:6px 0;border-bottom:1px solid #1a1a1a;">
+          <b>${g.name}</b> → ${g.guess} ${g.hit ? "✅" : ""}
+        </div>`
+      ).join("");
+
+      document.getElementById("guessList").innerHTML =
+        list || `<div class="muted">Ninguém enviou chute.</div>`;
+    });
+
+    socket.on("notaTurnCancelled", (msg) => {
+      alert(msg || "Turno cancelado.");
+    });
+
+    socket.on("notaTargetLeft", (msg) => {
+      alert(msg || "O alvo saiu. Pulando turno...");
+    });
+
+    socket.on("notaScoresReset", () => {
+      alert("Placar zerado.");
+    });
+
+    socket.on("notaCycleStarted", ({ order }) => {
+      // opcional: só feedback
+      // console.log("Novo ciclo:", order);
+    });
+  </script>
+</body>
+</html>
