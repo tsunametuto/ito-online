@@ -5,66 +5,87 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>De 1 a 100</title>
   <style>
-    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:20px}
-    .wrap{max-width:720px;margin:0 auto}
-    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0}
-    input,button{
-      width:100%;box-sizing:border-box;padding:14px;border-radius:10px;
+    body{margin:0;font-family:Arial;background:#0b0b0b;color:#eaeaea;text-align:center;padding:18px}
+    .wrap{max-width:820px;margin:0 auto}
+    .card{background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin:14px 0;text-align:left}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:180px}
+    button,input{
+      width:100%;box-sizing:border-box;padding:12px;border-radius:10px;
       border:1px solid #333;background:#1f1f1f;color:#fff;font-size:16px
     }
     button{cursor:pointer}
     button:hover{background:#2a2a2a}
-    .btnRow{display:flex;gap:10px;flex-wrap:wrap}
-    .btnRow>*{flex:1;min-width:160px}
-    .code{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;font-weight:800}
-    #number{font-size:48px;color:#25D366;margin:12px 0}
-    ul{list-style:none;padding:0;margin:0}
-    li{padding:8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;gap:10px;align-items:center}
     .muted{color:#aaa;font-size:13px;line-height:1.4}
-    .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #333;background:#151515;color:#ddd;font-size:12px}
-    .hidden{display:none !important}
-    .right{display:flex;gap:8px;align-items:center}
-    .onlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#25D366}
-    .offlineDot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#666}
-    .kickBtn{
-      padding:8px 10px;border-radius:10px;border:1px solid #333;background:#1f1f1f;color:#fff;cursor:pointer;
+    .pill{display:inline-block;padding:2px 8px;border:1px solid #333;border-radius:999px;font-size:12px;color:#aaa;margin-left:6px}
+    .players{display:flex;flex-wrap:wrap;gap:8px}
+    .p{border:1px solid #333;border-radius:999px;padding:6px 10px;font-size:13px}
+    .p.master{border-color:#f1c40f}
+    .p.off{opacity:.55}
+    .title{font-size:18px;font-weight:800;margin:0 0 6px 0}
+    .big{font-size:20px;font-weight:900}
+    .center{text-align:center}
+
+    /* feedback botão clicado (mesmo estilo que você curte) */
+    button.pressed{
+      outline: 2px solid #7a5cff;
+      border-color: #7a5cff !important;
+      box-shadow: 0 0 0 2px rgba(122,92,255,.15);
     }
-    .kickBtn:hover{background:#2a2a2a}
+    button.good-pressed{
+      outline: 2px solid #2ecc71;
+      border-color: #2ecc71 !important;
+      box-shadow: 0 0 0 2px rgba(46,204,113,.15);
+    }
+    button.bad-pressed{
+      outline: 2px solid #ff4d4d;
+      border-color: #ff4d4d !important;
+      box-shadow: 0 0 0 2px rgba(255,77,77,.15);
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1 style="margin:10px 0 0 0;">De 1 a 100 🎲</h1>
-    <div class="muted">Números únicos por rodada</div>
+    <h1 style="margin:6px 0 0 0;">DE 1 A 100</h1>
+    <div class="muted" id="subtitle">Carregando…</div>
 
     <div class="card">
-      <div>Sala: <span class="code" id="roomIdText">------</span></div>
-      <div>Você: <b id="nameText"></b></div>
-      <div class="muted" id="roleText" style="margin-top:6px;"></div>
-      <div class="muted" id="connText" style="margin-top:6px;"></div>
+      <div class="title">Sala</div>
+      <div class="muted">
+        Código: <b id="roomCode">------</b>
+        <span class="pill" id="rolePill">conectando…</span>
+      </div>
     </div>
 
-    <div class="card hidden" id="passwordCard">
-      <input id="passwordInput" placeholder="Senha da sala" />
-      <button id="btnEnter">Entrar</button>
-      <div class="muted" style="margin-top:8px;">Se você abriu o link direto, digite a senha aqui.</div>
-    </div>
+    <div class="card">
+      <div class="title">Jogadores</div>
+      <div class="players" id="players"></div>
 
-    <div class="card hidden" id="gameCard">
-      <div id="masterControls" class="hidden">
-        <div class="btnRow">
-          <button id="btnDistribute">Distribuir</button>
-          <button id="btnReveal">Revelar</button>
-        </div>
+      <div class="row" style="margin-top:12px;" id="masterControls" hidden>
+        <button id="btnDistribute">Iniciar rodada (distribuir)</button>
+        <button id="btnReveal">Revelar</button>
       </div>
 
-      <button id="btnLeave" style="margin-top:10px;">Sair</button>
+      <div class="row" style="margin-top:12px;">
+        <button id="btnLeave">Sair</button>
+      </div>
 
-      <div id="number"></div>
-      <div id="allNumbers"></div>
+      <div class="muted" style="margin-top:10px" id="kickHint" hidden>
+        Clique em um jogador acima para expulsar (só o mestre vê isso).
+      </div>
+    </div>
 
-      <h3>Jogadores</h3>
-      <ul id="players"></ul>
+    <div class="card">
+      <div class="title">Seu número</div>
+      <div class="center">
+        <div class="big" id="yourNumber">—</div>
+        <div class="muted" style="margin-top:8px;">Não fale seu número — tente ordenar na conversa 🙂</div>
+      </div>
+    </div>
+
+    <div class="card" id="revealBox" hidden>
+      <div class="title">Revelação</div>
+      <div id="revealList" class="muted"></div>
     </div>
   </div>
 
@@ -72,217 +93,146 @@
   <script>
     const socket = io();
 
-    function getPlayerToken(){
-      let t = localStorage.getItem("tbr_player_token");
-      if (!t) {
-        t = (crypto?.randomUUID?.() || (Date.now()+"-"+Math.random())).toString();
-        localStorage.setItem("tbr_player_token", t);
-      }
-      return t;
+    function setPressed(btn, type = "normal") {
+      if (!btn) return;
+      document.querySelectorAll("#masterControls button, #btnLeave").forEach(b => {
+        b.classList.remove("pressed", "good-pressed", "bad-pressed");
+      });
+      if (type === "good") btn.classList.add("good-pressed");
+      else if (type === "bad") btn.classList.add("bad-pressed");
+      else btn.classList.add("pressed");
     }
-    const playerToken = getPlayerToken();
 
-    const qs = new URLSearchParams(location.search);
-    const roomId = (qs.get("room") || "").trim().toUpperCase();
-    const name = (qs.get("name") || "").trim();
+    function qs(name){
+      const u = new URL(location.href);
+      return u.searchParams.get(name) || "";
+    }
 
-    document.getElementById("roomIdText").textContent = roomId || "??????";
-    document.getElementById("nameText").textContent = name || "Sem nome";
+    const roomId = qs("room").toUpperCase();
+    const nickname = qs("name");
+    const playerToken = qs("token") || localStorage.getItem("tbr_player_token") || "";
+    const sessionKey = qs("sessionKey") || sessionStorage.getItem(`tbr_session_${roomId}`) || "";
+
+    document.getElementById("roomCode").textContent = roomId || "------";
+    document.getElementById("subtitle").textContent = nickname ? `Você: ${nickname}` : "—";
+
+    // entra na sala via sessionKey (sem senha)
+    socket.emit("joinRoom", {
+      roomId,
+      password: "",
+      playerName: nickname,
+      playerToken,
+      sessionKey
+    });
 
     let isMaster = false;
-    let joined = false;
+    let playersCache = [];
 
-    const passwordCard = document.getElementById("passwordCard");
-    const gameCard = document.getElementById("gameCard");
-    const masterControls = document.getElementById("masterControls");
-    const roleText = document.getElementById("roleText");
-    const connText = document.getElementById("connText");
-
-    function joinRoomWithPassword(password){
-      socket.emit("joinRoom", { roomId, password, playerName: name, playerToken });
-    }
-    function joinRoomWithSession(sessionKey){
-      socket.emit("joinRoom", { roomId, sessionKey, playerName: name, playerToken });
+    function clearReveal(){
+      // ✅ limpa revelação anterior quando começa uma nova rodada
+      document.getElementById("revealBox").hidden = true;
+      document.getElementById("revealList").innerHTML = "";
     }
 
-    document.getElementById("btnEnter").onclick = () => {
-      const password = document.getElementById("passwordInput").value.trim();
-      if (!roomId) return alert("Código da sala ausente.");
-      if (!name) return alert("Nome ausente.");
-      if (!password) return alert("Digite a senha.");
-      joinRoomWithPassword(password);
-    };
+    function renderPlayers(list){
+      const wrap = document.getElementById("players");
+      wrap.innerHTML = "";
+      playersCache = list;
 
-    function storeSessionKey(key){
-      if (!roomId) return;
-      sessionStorage.setItem(`tbr_session_${roomId}`, key);
-    }
-    function getSessionKey(){
-      return sessionStorage.getItem(`tbr_session_${roomId}`);
-    }
-    function clearSessionKey(){
-      sessionStorage.removeItem(`tbr_session_${roomId}`);
-    }
+      list.forEach(p => {
+        const el = document.createElement("div");
+        el.className = "p" + (p.isMaster ? " master":"") + (p.online ? "" : " off");
+        el.textContent = p.name + (p.isMaster ? " 👑" : "") + (p.online ? "" : " (off)");
 
-    function attemptJoin(){
-      // 1) tenta por sessionKey (reconexão / suspensão)
-      const sk = getSessionKey();
-      if (sk) {
-        joinRoomWithSession(sk);
-        return;
-      }
+        if (isMaster && !p.isMaster) {
+          el.style.cursor = "pointer";
+          el.title = "Clique para expulsar";
+          el.onclick = () => {
+            const ok = confirm(`Expulsar ${p.name}?`);
+            if (!ok) return;
+            socket.emit("kickPlayer", { roomId, targetToken: p.token });
+          };
+        }
 
-      // 2) primeira entrada via lobby (senha temporária)
-      const masterPass = sessionStorage.getItem("tbr_master_password");
-      const masterRoom = (sessionStorage.getItem("tbr_master_room") || "").trim().toUpperCase();
-      if (masterPass && masterRoom === roomId) {
-        joinRoomWithPassword(masterPass);
-        return;
-      }
-
-      const joinPass = sessionStorage.getItem("tbr_join_password");
-      const joinRoom = (sessionStorage.getItem("tbr_join_room") || "").trim().toUpperCase();
-      if (joinPass && joinRoom === roomId) {
-        joinRoomWithPassword(joinPass);
-        return;
-      }
-
-      // 3) link direto
-      passwordCard.classList.remove("hidden");
+        wrap.appendChild(el);
+      });
     }
 
-    function showGame(){
-      passwordCard.classList.add("hidden");
-      gameCard.classList.remove("hidden");
-    }
+    const btnDistribute = document.getElementById("btnDistribute");
+    const btnReveal = document.getElementById("btnReveal");
+    const btnLeave = document.getElementById("btnLeave");
 
-    // reconexão automática (socket.io reconecta; a gente reentra com sessionKey)
-    socket.on("connect", () => {
-      connText.textContent = "Conectado ✅";
-      if (!joined) attemptJoin();
-    });
-
-    socket.on("disconnect", () => {
-      connText.textContent = "Desconectado… tentando reconectar";
-      joined = false;
-    });
-
-    // ações
-    document.getElementById("btnDistribute").onclick = () => {
+    btnDistribute.onclick = () => {
+      setPressed(btnDistribute);
+      clearReveal(); // ✅ limpa imediatamente no clique também (além do evento do server)
       socket.emit("distribute", roomId);
-      document.getElementById("allNumbers").innerHTML = "";
     };
 
-    document.getElementById("btnReveal").onclick = () => {
+    btnReveal.onclick = () => {
+      setPressed(btnReveal, "good");
       socket.emit("reveal", roomId);
     };
 
-    document.getElementById("btnLeave").onclick = () => {
+    btnLeave.onclick = () => {
+      setPressed(btnLeave, "bad");
       socket.emit("leaveRoom", roomId);
-
-      // limpa tudo da sessão
-      sessionStorage.removeItem("tbr_master_password");
-      sessionStorage.removeItem("tbr_master_room");
-      sessionStorage.removeItem("tbr_join_password");
-      sessionStorage.removeItem("tbr_join_room");
-      clearSessionKey();
-
       window.location.href = "/";
     };
 
-    // eventos servidor
-    socket.on("errorMessage", (msg) => {
-      alert(msg);
-      passwordCard.classList.remove("hidden");
-    });
-
-    socket.on("joinedRoom", ({ sessionKey }) => {
-      joined = true;
-      showGame();
-
-      // guarda sessionKey (sem senha)
-      if (sessionKey) storeSessionKey(sessionKey);
-
-      // apaga senha temporária (não fica salva)
-      sessionStorage.removeItem("tbr_master_password");
-      sessionStorage.removeItem("tbr_master_room");
-      sessionStorage.removeItem("tbr_join_password");
-      sessionStorage.removeItem("tbr_join_room");
-
-      roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
-    });
+    socket.on("errorMessage", (m) => alert(m));
 
     socket.on("master", () => {
       isMaster = true;
-      masterControls.classList.remove("hidden");
-      roleText.textContent = "Você é o mestre 👑";
-    });
+      document.getElementById("rolePill").textContent = "mestre 👑";
+      document.getElementById("masterControls").hidden = false;
+      document.getElementById("kickHint").hidden = false;
 
-    socket.on("playersUpdate", (payload) => {
-      const ul = document.getElementById("players");
-      ul.innerHTML = "";
-
-      if (payload && payload.players) {
-        payload.players.forEach(p => {
-          const li = document.createElement("li");
-
-          const left = document.createElement("span");
-          left.textContent = p.name + (p.isMaster ? " 👑" : "");
-
-          const right = document.createElement("span");
-          right.className = "right";
-
-          const dot = document.createElement("span");
-          dot.className = p.online ? "onlineDot" : "offlineDot";
-          dot.title = p.online ? "online" : "offline";
-          right.appendChild(dot);
-
-          if (isMaster && !p.isMaster) {
-            const btn = document.createElement("button");
-            btn.className = "kickBtn";
-            btn.textContent = "Expulsar";
-            btn.onclick = () => {
-              if (confirm(`Expulsar ${p.name}?`)) {
-                socket.emit("kickPlayer", { roomId, targetToken: p.token });
-              }
-            };
-            right.appendChild(btn);
-          }
-
-          li.appendChild(left);
-          li.appendChild(right);
-
-          ul.appendChild(li);
-        });
-      }
-    });
-
-    socket.on("number", (n) => {
-      document.getElementById("number").textContent = `Seu número: ${n}`;
-    });
-
-    socket.on("allNumbers", (data) => {
-      const div = document.getElementById("allNumbers");
-      div.innerHTML = "<h3>Revelação (maior → menor)</h3>";
-      data.forEach(p => {
-        div.innerHTML += `<p>${p.name} → <b>${p.number}</b></p>`;
-      });
+      if (playersCache.length) renderPlayers(playersCache);
     });
 
     socket.on("roomClosed", () => {
-      alert("O mestre saiu. A sala foi fechada.");
-      clearSessionKey();
+      alert("A sala foi fechada.");
       window.location.href = "/";
     });
 
     socket.on("kicked", ({ reason }) => {
       alert(reason || "Você foi expulso.");
-      clearSessionKey();
       window.location.href = "/";
     });
 
-    // primeira tentativa (caso connect já esteja ok)
-    attemptJoin();
+    socket.on("playersUpdate", ({ players, gameType }) => {
+      if (gameType && gameType !== "ito") return;
+      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
+      renderPlayers(players);
+    });
+
+    socket.on("number", (n) => {
+      // ✅ se chegou número novo, é rodada nova: limpa revelação antiga
+      clearReveal();
+      document.getElementById("yourNumber").textContent = String(n ?? "—");
+    });
+
+    // ✅ vindo do server quando o mestre inicia nova rodada
+    socket.on("itoNewRound", () => {
+      clearReveal();
+    });
+
+    socket.on("allNumbers", (list) => {
+      const box = document.getElementById("revealBox");
+      const ul = document.getElementById("revealList");
+      box.hidden = false;
+
+      if (!Array.isArray(list) || !list.length) {
+        ul.innerHTML = "<div>Nada para revelar.</div>";
+        return;
+      }
+
+      ul.innerHTML = list.map(x => {
+        const name = (x && x.name) ? x.name : "Jogador";
+        const num = (x && x.number != null) ? x.number : "—";
+        return `<div><b>${name}</b>: ${num}</div>`;
+      }).join("");
+    });
   </script>
 </body>
 </html>
