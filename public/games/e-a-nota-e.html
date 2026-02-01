@@ -73,8 +73,8 @@
       <div class="title">Jogadores</div>
       <div class="players" id="players"></div>
 
-      <!-- ✅ mestre: começa escondido de verdade -->
-      <div class="row" style="margin-top:12px;" id="masterControls" class="hidden" hidden>
+      <!-- ✅ mestre: começa escondido -->
+      <div class="row hidden" style="margin-top:12px;" id="masterControls" hidden>
         <button id="btnStart">Iniciar turno</button>
         <button id="btnReveal">Revelar</button>
         <button id="btnNext">Próximo turno</button>
@@ -150,16 +150,13 @@
     const roomId = qs("room").toUpperCase();
     const nickname = qs("name").trim();
 
-    // ✅ token consistente (não dependa de ?token)
     const playerToken = getOrCreatePlayerToken();
-
-    // sessionKey segue sua lógica padrão
     const sessionKey = qs("sessionKey") || sessionStorage.getItem(`tbr_session_${roomId}`) || "";
 
     document.getElementById("roomCode").textContent = roomId || "------";
     document.getElementById("subtitle").textContent = nickname ? `Você: ${nickname}` : "—";
 
-    // entra por sessionKey
+    // ✅ entra por sessionKey
     socket.emit("joinRoom", {
       roomId,
       password: "",
@@ -168,10 +165,37 @@
       sessionKey
     });
 
+    // -------------------------
+    // ✅ CONTROLE DE MESTRE (FRONT)
+    // -------------------------
     let isMaster = false;
     let playersCache = [];
     let lastState = null;
     let myGuess = null;
+
+    const masterControlsEl = document.getElementById("masterControls");
+    const kickHintEl = document.getElementById("kickHint");
+    const rolePillEl = document.getElementById("rolePill");
+
+    function setMasterUI(flag){
+      isMaster = !!flag;
+
+      rolePillEl.textContent = isMaster ? "mestre 👑" : "jogador";
+
+      // ⚠️ aqui é o “cadeado”: só mostra se EU realmente sou mestre
+      masterControlsEl.hidden = !isMaster;
+      masterControlsEl.classList.toggle("hidden", !isMaster);
+
+      kickHintEl.hidden = !isMaster;
+
+      // re-render pra ligar/desligar clique de expulsar
+      if (playersCache.length) renderPlayers(playersCache);
+    }
+
+    // ✅ ignore totalmente o evento `master` (não confie nele)
+    socket.on("master", () => {
+      // não faz nada; o estado real vem do playersUpdate
+    });
 
     function renderPlayers(list){
       const wrap = document.getElementById("players");
@@ -237,9 +261,7 @@
     }
 
     function clearMySecretNumberUI(){
-      // ✅ limpa SUA NOTA de rodadas anteriores
       const bigBox = document.getElementById("bigBox");
-      // só limpa se estiver mostrando algo do tipo "SUA NOTA"
       if ((bigBox.textContent || "").toUpperCase().includes("SUA NOTA")) {
         bigBox.textContent = "—";
       }
@@ -252,24 +274,32 @@
     const btnResetScores = document.getElementById("btnResetScores");
     const btnLeave = document.getElementById("btnLeave");
 
-    btnStart.onclick = () => {
+    // ✅ gate extra: se não for mestre, bloqueia click mesmo que apareça por bug
+    function masterOnly(fn){
+      return (...args) => {
+        if (!isMaster) return;
+        fn(...args);
+      };
+    }
+
+    btnStart.onclick = masterOnly(() => {
       setPressed(btnStart);
       socket.emit("notaStartTurn", roomId);
-    };
-    btnReveal.onclick = () => {
+    });
+    btnReveal.onclick = masterOnly(() => {
       setPressed(btnReveal, "bad");
       socket.emit("notaReveal", roomId);
-    };
-    btnNext.onclick = () => {
+    });
+    btnNext.onclick = masterOnly(() => {
       setPressed(btnNext);
       socket.emit("notaNextTurn", roomId);
-    };
-    btnResetScores.onclick = () => {
+    });
+    btnResetScores.onclick = masterOnly(() => {
       const ok = confirm("Zerar placar?");
       if (!ok) return;
       setPressed(btnResetScores, "bad");
       socket.emit("notaResetScores", roomId);
-    };
+    });
 
     btnLeave.onclick = () => {
       setPressed(btnLeave, "bad");
@@ -295,24 +325,24 @@
     socket.on("errorMessage", (m) => alert(m));
 
     socket.on("joinedRoom", ({ sessionKey }) => {
-      // salva sessionKey (igual seus outros jogos)
       if (sessionKey && roomId) {
         sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
       }
     });
 
-    // ✅ Somente o mestre recebe este evento, então é o “gate” oficial.
-    socket.on("master", () => {
-      isMaster = true;
-      document.getElementById("rolePill").textContent = "mestre 👑";
-      document.getElementById("masterControls").hidden = false;
-      document.getElementById("kickHint").hidden = false;
-    });
-
+    // ✅ AQUI fica o mestre real: vem do playersUpdate
     socket.on("playersUpdate", ({ players, gameType }) => {
       if (gameType && gameType !== "e-a-nota-e") return;
-      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
+
       renderPlayers(players);
+
+      // descobre se meu token é mestre
+      const me = (players || []).find(p => p.token === playerToken);
+      const amIMaster = !!me?.isMaster;
+
+      // atualiza UI só se mudou
+      if (amIMaster !== isMaster) setMasterUI(amIMaster);
+      else rolePillEl.textContent = isMaster ? "mestre 👑" : "jogador";
     });
 
     socket.on("roomClosed", () => {
@@ -332,16 +362,13 @@
       const phase = state?.phase || "lobby";
       document.getElementById("phasePill").textContent = "fase: " + phase;
 
-      // ✅ placar
       renderScoreboard(state.scoreboard);
 
       const turnLine = document.getElementById("turnLine");
       const bigBox = document.getElementById("bigBox");
       const guessStatus = document.getElementById("guessStatus");
 
-      if (phase !== "revealed") {
-        showRevealUI(false);
-      }
+      if (phase !== "revealed") showRevealUI(false);
 
       if (phase === "lobby") {
         showGuessUI(false);
@@ -358,12 +385,10 @@
         if (meIsTarget) {
           showGuessUI(false);
           turnLine.textContent = `Você é o alvo desta vez.`;
-          // o número vem pelo evento notaSecret, mas se ele ainda não chegou, deixa esse placeholder
           if (!String(bigBox.textContent || "").toUpperCase().includes("SUA NOTA")) {
             bigBox.textContent = "Sua nota está na sua tela ✅";
           }
         } else {
-          // ✅ se eu NÃO sou alvo, garanta que NÃO fique mostrando SUA NOTA antiga
           clearMySecretNumberUI();
 
           showGuessUI(true);
@@ -378,7 +403,6 @@
       if (phase === "revealed") {
         showGuessUI(false);
         turnLine.textContent = "Resultado revelado.";
-        // evita ficar preso com SUA NOTA
         bigBox.textContent = "—";
       }
     });
@@ -387,7 +411,7 @@
     socket.on("notaSecret", ({ rating }) => {
       const bigBox = document.getElementById("bigBox");
       if (lastState?.phase !== "guessing") return;
-      if (!isMeTarget(lastState)) return; // ✅ não deixa “SUA NOTA” vazar pra quem não é alvo
+      if (!isMeTarget(lastState)) return;
       bigBox.textContent = `SUA NOTA: ${rating}`;
     });
 
@@ -403,7 +427,6 @@
     });
 
     socket.on("notaTurnStarted", () => {
-      // ✅ limpa seleção visual de botões 1-10
       document.querySelectorAll(".numBtn").forEach(b => {
         b.classList.remove("pressed", "good-pressed", "bad-pressed");
       });
@@ -414,9 +437,7 @@
       document.getElementById("revealLine2").textContent = "";
       document.getElementById("guessList").innerHTML = "";
 
-      // ✅ MUITO IMPORTANTE: limpar qualquer SUA NOTA antiga imediatamente ao iniciar turno novo
       clearMySecretNumberUI();
-      // e também tirar resultado antigo da tela
       showRevealUI(false);
     });
 
@@ -435,14 +456,11 @@
       document.getElementById("guessList").innerHTML =
         list || `<div class="muted">Ninguém enviou chute.</div>`;
 
-      // ✅ garantir que após revelar, não fique SUA NOTA antiga
-      const bigBox = document.getElementById("bigBox");
-      bigBox.textContent = "—";
+      document.getElementById("bigBox").textContent = "—";
     });
 
     socket.on("notaTurnCancelled", (msg) => {
       alert(msg || "Turno cancelado.");
-      // limpa UI
       showGuessUI(false);
       showRevealUI(false);
       document.getElementById("turnLine").textContent = "Aguardando o mestre iniciar…";
@@ -453,13 +471,15 @@
 
     socket.on("notaTargetLeft", (msg) => {
       alert(msg || "O alvo saiu. Pulando turno...");
-      // limpa SUA NOTA antiga também
       clearMySecretNumberUI();
     });
 
     socket.on("notaScoresReset", () => {
       alert("Placar zerado.");
     });
+
+    // ✅ estado inicial: garante oculto até chegar playersUpdate
+    setMasterUI(false);
   </script>
 </body>
 </html>
