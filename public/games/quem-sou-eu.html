@@ -157,6 +157,31 @@
     const connText = document.getElementById("connText");
     const phasePill = document.getElementById("phasePill");
 
+    // ---------- LIMPEZAS (rodada nova / troca de fase) ----------
+    function resetRoundUI(){
+      // limpa "seu personagem"
+      const yc = document.getElementById("yourCharacter");
+      if (yc) yc.textContent = "(ainda não revelado)";
+
+      // limpa lista dos outros
+      const others = document.getElementById("othersList");
+      if (others) others.innerHTML = "";
+
+      // limpa alvo e input de escrita
+      const tn = document.getElementById("targetName");
+      if (tn) tn.textContent = "---";
+      const ct = document.getElementById("characterText");
+      if (ct) ct.value = "";
+      const si = document.getElementById("submitInfo");
+      if (si) si.textContent = "";
+
+      // limpa listas do mestre (sem depender de fase)
+      const ws = document.getElementById("writingStatus");
+      if (ws) ws.innerHTML = "";
+      const rl = document.getElementById("revealList");
+      if (rl) rl.innerHTML = "";
+    }
+
     function storeSessionKey(key){
       if (!roomId) return;
       sessionStorage.setItem(`tbr_session_${roomId}`, key);
@@ -189,6 +214,12 @@
     function setPhase(p){
       phase = p;
       phasePill.textContent = "Fase: " + p;
+
+      // ✅ sempre que muda fase, garante limpeza onde faz sentido
+      // (principalmente lobby/writing, pra não ficar "revelado" de antes)
+      if (p === "lobby" || p === "writing") {
+        resetRoundUI();
+      }
 
       writingCard.classList.add("hidden");
       playingCard.classList.add("hidden");
@@ -273,6 +304,9 @@
       sessionStorage.removeItem("tbr_join_password");
       sessionStorage.removeItem("tbr_join_room");
 
+      // hard-hide: se não for mestre, garante que fica invisível
+      if (!isMaster) masterControls.classList.add("hidden");
+
       roleText.textContent = isMaster ? "Você é o mestre 👑" : "Você é jogador";
     });
 
@@ -321,6 +355,12 @@
     });
 
     socket.on("qsePhase", ({ phase }) => setPhase(phase));
+
+    // ✅ NOVO: rodada nova -> limpa tudo que pode ter ficado da anterior
+    socket.on("qseNewRound", () => {
+      resetRoundUI();
+      // não força fase aqui — o servidor vai mandar qsePhase logo depois
+    });
 
     socket.on("qseYourTarget", ({ targetName }) => {
       document.getElementById("targetName").textContent = targetName;
