@@ -731,7 +731,7 @@ function goNextInfiltradoRound(roomId) {
   emitInfiltradoState(roomId);
 }
 
-/* ------------------ E A NOTA É... (NOVO) ------------------ */
+/* ------------------ E A NOTA É... ------------------ */
 
 function ensureNota(room) {
   if (!room.nota) {
@@ -787,7 +787,6 @@ function notaStartNewCycle(roomId) {
 }
 
 function notaPickNextOnlineTarget(room) {
-  // tenta achar próximo alvo online dentro do turnOrder
   for (let tries = 0; tries < room.nota.turnOrder.length; tries++) {
     const idx = room.nota.turnIndex % room.nota.turnOrder.length;
     const token = room.nota.turnOrder[idx];
@@ -797,6 +796,27 @@ function notaPickNextOnlineTarget(room) {
     room.nota.turnIndex += 1;
   }
   return null;
+}
+
+function notaSendSecretToTarget(roomId) {
+  const room = rooms[roomId];
+  if (!room || !room.nota) return;
+  if (room.nota.phase !== "guessing") return;
+
+  const targetToken = room.nota.targetToken;
+  const rating = room.nota.targetRating;
+
+  if (!targetToken || !rating) return;
+
+  const sid = room.players[targetToken]?.socketId;
+  if (!sid) return;
+
+  // ✅ manda em duplicidade de nomes: rating + number
+  io.to(sid).emit("notaSecret", {
+    rating,
+    number: rating,
+    targetName: room.players[targetToken]?.name || "Jogador",
+  });
 }
 
 function notaStartTurn(roomId) {
@@ -824,36 +844,25 @@ function notaStartTurn(roomId) {
     return { ok: false, error: "Poucas pessoas online para continuar." };
   }
 
-  // começa turno
   room.nota.phase = "guessing";
   room.nota.targetToken = targetToken;
   room.nota.targetRating = Math.floor(Math.random() * 10) + 1; // 1..10
   room.nota.guessesByToken = {};
 
-  // inicializa scores se necessário
   if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
 
-  // envia segredo pro alvo
-  const targetSid = room.players[targetToken]?.socketId;
-  if (targetSid) {
-    io.to(targetSid).emit("notaSecret", {
-      rating: room.nota.targetRating,
-      targetName: room.players[targetToken]?.name || "Jogador",
-    });
-  }
+  // ✅ garante que o alvo receba a nota (e a UI não dependa só do primeiro disparo)
+  notaSendSecretToTarget(roomId);
 
-  // envia prompt pros outros
+  // envia prompt pros outros (participantes do ciclo)
   const targetName = room.players[targetToken]?.name || "Jogador";
   Object.keys(room.players).forEach((t) => {
     const sid = room.players[t]?.socketId;
     if (!sid) return;
-
-    // só participantes do ciclo
     if (!room.nota.active.has(t)) return;
+    if (t === targetToken) return;
 
-    if (t !== targetToken) {
-      io.to(sid).emit("notaPromptGuess", { targetName });
-    }
+    io.to(sid).emit("notaPromptGuess", { targetName });
   });
 
   io.to(roomId).emit("notaTurnStarted", { targetName });
@@ -873,12 +882,11 @@ function notaReveal(roomId) {
 
   if (!targetToken || !rating) return { ok: false, error: "Estado inválido do turno." };
 
-  // conta acertos
   const guesses = [];
   let hits = 0;
 
   for (const t of Object.keys(room.nota.guessesByToken)) {
-    if (!room.nota.active.has(t)) continue; // já saiu do ciclo
+    if (!room.nota.active.has(t)) continue;
     const g = room.nota.guessesByToken[t];
     if (typeof g !== "number") continue;
 
@@ -889,7 +897,6 @@ function notaReveal(roomId) {
   }
 
   // ✅ pontuação (Opção B)
-  // quem acertou: +1
   guesses.forEach(x => {
     if (x.hit) {
       if (room.nota.scores[x.token] == null) room.nota.scores[x.token] = 0;
@@ -897,7 +904,6 @@ function notaReveal(roomId) {
     }
   });
 
-  // alvo: 1 + acertos
   if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
   room.nota.scores[targetToken] += (1 + hits);
 
@@ -909,6 +915,7 @@ function notaReveal(roomId) {
     targetToken,
     targetName,
     rating,
+    number: rating, // ✅ compat
     hits,
     guesses: guesses.sort((a, b) => a.name.localeCompare(b.name)),
     addedToTarget: 1 + hits,
@@ -923,11 +930,9 @@ function notaNextTurn(roomId) {
   if (!room) return { ok: false, error: "Sala inválida." };
   ensureNota(room);
 
-  // avança índice do ciclo (o alvo atual já foi)
   room.nota.turnIndex += 1;
   notaResetTurn(room);
 
-  // tenta começar o próximo imediatamente
   return notaStartTurn(roomId);
 }
 
@@ -936,7 +941,6 @@ function emitNotaState(roomId) {
   if (!room) return;
   ensureNota(room);
 
-  // placar (só players existentes)
   const scoreboard = Object.keys(room.players).map(t => ({
     token: t,
     name: room.players[t]?.name || "Jogador",
@@ -945,11 +949,11 @@ function emitNotaState(roomId) {
   })).sort((a, b) => b.points - a.points);
 
   const submitted = {};
-  Object.keys(room.nota.guessesByToken).forEach(t => {
-    submitted[t] = true;
-  });
+  Object.keys(room.nota.guessesByToken).forEach(t => { submitted[t] = true; });
 
-  const activeNames = Array.from(room.nota.active || []).map(t => room.players[t]?.name).filter(Boolean);
+  const activeNames = Array.from(room.nota.active || [])
+    .map(t => room.players[t]?.name)
+    .filter(Boolean);
 
   io.to(roomId).emit("notaState", {
     phase: room.nota.phase,
@@ -962,19 +966,21 @@ function emitNotaState(roomId) {
     submitted,
     scoreboard,
   });
+
+  // ✅ importante: re-garante o segredo pro alvo
+  // (sem vazar pros outros)
+  notaSendSecretToTarget(roomId);
 }
 
 function notaHandlePlayerRemoved(roomId, token) {
   const room = rooms[roomId];
   if (!room || !room.nota) return;
 
-  // remove do ciclo e da ordem
   room.nota.active.delete(token);
   room.nota.turnOrder = (room.nota.turnOrder || []).filter(t => t !== token);
   delete room.nota.guessesByToken[token];
   delete room.nota.scores[token];
 
-  // se ficou menos de 2 no ciclo, volta pra lobby
   if (room.nota.active.size < 2 || room.nota.turnOrder.length < 2) {
     notaResetTurn(room);
     emitNotaState(roomId);
@@ -982,13 +988,10 @@ function notaHandlePlayerRemoved(roomId, token) {
     return;
   }
 
-  // se o removido era o alvo e o turno estava rolando, passa pro próximo automaticamente
   if (room.nota.phase === "guessing" && room.nota.targetToken === token) {
     io.to(roomId).emit("notaTargetLeft", "O alvo saiu/desconectou. Pulando para o próximo...");
-    // garante que o índice do ciclo avance (o alvo perdeu a vez)
     room.nota.turnIndex += 1;
     notaResetTurn(room);
-    // tenta iniciar próximo
     notaStartTurn(roomId);
     return;
   }
@@ -1040,7 +1043,7 @@ io.on("connection", (socket) => {
       qse: null,
       spy: null,
       infiltrado: null,
-      nota: null, // ✅ novo
+      nota: null,
     };
 
     rooms[roomId].players[playerToken] = {
@@ -1208,12 +1211,9 @@ io.on("connection", (socket) => {
       ensureNota(room);
       emitNotaState(roomId);
 
-      // Se estiver rolando turno, reenvia o papel do usuário
+      // ✅ reforço: se ele é o alvo no turno atual, manda o segredo (rating+number)
       if (room.nota.phase === "guessing" && room.nota.targetToken === playerToken) {
-        io.to(socket.id).emit("notaSecret", {
-          rating: room.nota.targetRating,
-          targetName: room.players[playerToken]?.name || "Jogador",
-        });
+        notaSendSecretToTarget(roomId);
       } else if (room.nota.phase === "guessing" && room.nota.targetToken && room.nota.active.has(playerToken)) {
         const targetName = room.players[room.nota.targetToken]?.name || "Jogador";
         io.to(socket.id).emit("notaPromptGuess", { targetName });
@@ -1247,7 +1247,6 @@ io.on("connection", (socket) => {
     if (!callerToken) return;
     if (callerToken !== room.masterToken) return;
 
-    // ✅ avisa UI pra limpar revelação anterior
     io.to(roomId).emit("itoNewRound");
 
     room.numbers = {};
@@ -1293,7 +1292,6 @@ io.on("connection", (socket) => {
     ensureQse(room);
     qseResetRound(room);
 
-    // ✅ limpa a UI do "seu personagem" da rodada anterior
     io.to(roomId).emit("qseNewRound");
 
     const tokens = Object.keys(room.players).filter((t) => room.players[t].online);
@@ -1835,7 +1833,6 @@ io.on("connection", (socket) => {
 
     cancelPlayerRemoval(roomId, token);
 
-    // Ajusta jogos que dependem desse token
     if (room.nota) notaHandlePlayerRemoved(roomId, token);
 
     delete room.players[token];
@@ -1882,9 +1879,6 @@ io.on("connection", (socket) => {
       room.players[token].online = false;
       room.players[token].socketId = null;
 
-      // se for o jogo de nota e o cara é o alvo,
-      // a gente NÃO pula imediatamente — só pula quando for removido de fato (10 min)
-      // (isso evita pular turno por oscilação curta)
       schedulePlayerRemoval(roomId, token);
 
       emitPlayersUpdate(roomId);
