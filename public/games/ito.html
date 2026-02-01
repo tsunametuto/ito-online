@@ -42,6 +42,8 @@
       border-color: #ff4d4d !important;
       box-shadow: 0 0 0 2px rgba(255,77,77,.15);
     }
+
+    .hidden{display:none !important}
   </style>
 </head>
 <body>
@@ -61,7 +63,8 @@
       <div class="title">Jogadores</div>
       <div class="players" id="players"></div>
 
-      <div class="row" style="margin-top:12px;" id="masterControls" hidden>
+      <!-- ✅ mestre: começa escondido de verdade -->
+      <div class="row hidden" style="margin-top:12px;" id="masterControls" hidden>
         <button id="btnDistribute">Iniciar rodada (distribuir)</button>
         <button id="btnReveal">Revelar</button>
       </div>
@@ -108,9 +111,18 @@
       return u.searchParams.get(name) || "";
     }
 
+    function getOrCreatePlayerToken(){
+      let t = localStorage.getItem("tbr_player_token");
+      if (!t) {
+        t = (crypto?.randomUUID?.() || (Date.now()+"-"+Math.random())).toString();
+        localStorage.setItem("tbr_player_token", t);
+      }
+      return t;
+    }
+
     const roomId = qs("room").toUpperCase();
-    const nickname = qs("name");
-    const playerToken = qs("token") || localStorage.getItem("tbr_player_token") || "";
+    const nickname = (qs("name") || "").trim();
+    const playerToken = getOrCreatePlayerToken();
     const sessionKey = qs("sessionKey") || sessionStorage.getItem(`tbr_session_${roomId}`) || "";
 
     document.getElementById("roomCode").textContent = roomId || "------";
@@ -128,8 +140,24 @@
     let isMaster = false;
     let playersCache = [];
 
+    const rolePillEl = document.getElementById("rolePill");
+    const masterControlsEl = document.getElementById("masterControls");
+    const kickHintEl = document.getElementById("kickHint");
+
+    function setMasterUI(flag){
+      isMaster = !!flag;
+
+      rolePillEl.textContent = isMaster ? "mestre 👑" : "jogador";
+
+      masterControlsEl.hidden = !isMaster;
+      masterControlsEl.classList.toggle("hidden", !isMaster);
+
+      kickHintEl.hidden = !isMaster;
+
+      if (playersCache.length) renderPlayers(playersCache);
+    }
+
     function clearReveal(){
-      // ✅ limpa revelação anterior quando começa uma nova rodada
       document.getElementById("revealBox").hidden = true;
       document.getElementById("revealList").innerHTML = "";
     }
@@ -137,9 +165,9 @@
     function renderPlayers(list){
       const wrap = document.getElementById("players");
       wrap.innerHTML = "";
-      playersCache = list;
+      playersCache = list || [];
 
-      list.forEach(p => {
+      playersCache.forEach(p => {
         const el = document.createElement("div");
         el.className = "p" + (p.isMaster ? " master":"") + (p.online ? "" : " off");
         el.textContent = p.name + (p.isMaster ? " 👑" : "") + (p.online ? "" : " (off)");
@@ -158,20 +186,33 @@
       });
     }
 
+    // ✅ ignore totalmente o evento `master` (não confie nele)
+    socket.on("master", () => {
+      // não faz nada; mestre real vem do playersUpdate
+    });
+
+    // gate extra: se não for mestre, não executa
+    function masterOnly(fn){
+      return (...args) => {
+        if (!isMaster) return;
+        fn(...args);
+      };
+    }
+
     const btnDistribute = document.getElementById("btnDistribute");
     const btnReveal = document.getElementById("btnReveal");
     const btnLeave = document.getElementById("btnLeave");
 
-    btnDistribute.onclick = () => {
+    btnDistribute.onclick = masterOnly(() => {
       setPressed(btnDistribute);
-      clearReveal(); // ✅ limpa imediatamente no clique também (além do evento do server)
+      clearReveal();
       socket.emit("distribute", roomId);
-    };
+    });
 
-    btnReveal.onclick = () => {
+    btnReveal.onclick = masterOnly(() => {
       setPressed(btnReveal, "good");
       socket.emit("reveal", roomId);
-    };
+    });
 
     btnLeave.onclick = () => {
       setPressed(btnLeave, "bad");
@@ -181,13 +222,10 @@
 
     socket.on("errorMessage", (m) => alert(m));
 
-    socket.on("master", () => {
-      isMaster = true;
-      document.getElementById("rolePill").textContent = "mestre 👑";
-      document.getElementById("masterControls").hidden = false;
-      document.getElementById("kickHint").hidden = false;
-
-      if (playersCache.length) renderPlayers(playersCache);
+    socket.on("joinedRoom", ({ sessionKey }) => {
+      if (sessionKey && roomId) {
+        sessionStorage.setItem(`tbr_session_${roomId}`, sessionKey);
+      }
     });
 
     socket.on("roomClosed", () => {
@@ -202,17 +240,21 @@
 
     socket.on("playersUpdate", ({ players, gameType }) => {
       if (gameType && gameType !== "ito") return;
-      document.getElementById("rolePill").textContent = isMaster ? "mestre 👑" : "jogador";
+
       renderPlayers(players);
+
+      const me = (players || []).find(p => p.token === playerToken);
+      const amIMaster = !!me?.isMaster;
+
+      if (amIMaster !== isMaster) setMasterUI(amIMaster);
+      else rolePillEl.textContent = isMaster ? "mestre 👑" : "jogador";
     });
 
     socket.on("number", (n) => {
-      // ✅ se chegou número novo, é rodada nova: limpa revelação antiga
       clearReveal();
       document.getElementById("yourNumber").textContent = String(n ?? "—");
     });
 
-    // ✅ vindo do server quando o mestre inicia nova rodada
     socket.on("itoNewRound", () => {
       clearReveal();
     });
@@ -233,6 +275,9 @@
         return `<div><b>${name}</b>: ${num}</div>`;
       }).join("");
     });
+
+    // ✅ estado inicial: garante oculto até chegar playersUpdate
+    setMasterUI(false);
   </script>
 </body>
 </html>
