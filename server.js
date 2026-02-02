@@ -140,6 +140,83 @@ function pickDistinct(arr, n) {
   return shuffle(arr).slice(0, Math.min(n, arr.length));
 }
 
+/* ---------------------------------------------------
+   ✅ FIX INFILTRADO: filtra dicas incompatíveis
+--------------------------------------------------- */
+function norm(s) {
+  return String(s || "").trim().toLowerCase();
+}
+function hintHas(hint, word) {
+  return norm(hint).includes(word);
+}
+
+function getCompatibleHints(themeKey, concept, hints) {
+  const c = norm(concept);
+  const list = Array.isArray(hints) ? hints.slice() : [];
+  if (!list.length) return list;
+
+  // ✅ regras mínimas para "veiculos" (corrige seu exemplo do jato)
+  if (themeKey === "veiculos") {
+    const fast = new Set([
+      "jato",
+      "avião",
+      "foguete",
+      "nave espacial",
+      "carro de corrida",
+      "moto",
+      "star destroyer",
+      "delorean",
+      "batmóvel",
+    ].map(norm));
+
+    const silent = new Set([
+      "carro elétrico",
+      "bicicleta",
+      "patinete",
+      "skate",
+      "metrô",
+      "trem",
+    ].map(norm));
+
+    const noisy = new Set([
+      "caminhão",
+      "ônibus",
+      "moto",
+      "avião",
+      "helicóptero",
+      "jato",
+      "viatura",
+      "ambulância",
+      "foguete",
+      "carro de corrida",
+      "trator",
+    ].map(norm));
+
+    let filtered = list;
+
+    // se é rápido, remove dica que contém "lento"
+    if (fast.has(c)) {
+      filtered = filtered.filter((h) => !hintHas(h, "lento"));
+    }
+
+    // se é notoriamente silencioso, remove dica que contém "barulhento"
+    if (silent.has(c)) {
+      filtered = filtered.filter((h) => !hintHas(h, "barulhento"));
+    }
+
+    // se é notoriamente barulhento, remove dica que contém "silencioso"
+    if (noisy.has(c)) {
+      filtered = filtered.filter((h) => !hintHas(h, "silencioso"));
+    }
+
+    return filtered.length ? filtered : list;
+  }
+
+  // outros temas: mantém como está
+  return list;
+}
+/* --------------------------------------------------- */
+
 function schedulePlayerRemoval(roomId, token) {
   const room = rooms[roomId];
   if (!room) return;
@@ -645,7 +722,11 @@ function startInfiltradoRound(roomId) {
   const theme = INFILTRADO_DATA.themes[themeKey];
 
   const concept = pickOne(theme.concepts);
-  const infiltradoHint = pickOne(theme.infiltratorHints);
+
+  // ✅ CORREÇÃO: escolhe dica do infiltrado filtrando incompatíveis com o conceito
+  const compatibleHints = getCompatibleHints(themeKey, concept, theme.infiltratorHints);
+  const infiltradoHint = pickOne(compatibleHints);
+
   const questions = pickDistinct(theme.questions, 3);
   const infiltradoToken = pickOne(tokens);
 
@@ -851,7 +932,7 @@ function notaStartTurn(roomId) {
 
   if (room.nota.scores[targetToken] == null) room.nota.scores[targetToken] = 0;
 
-  // ✅ garante que o alvo receba a nota (e a UI não dependa só do primeiro disparo)
+  // ✅ garante que o alvo receba a nota
   notaSendSecretToTarget(roomId);
 
   // envia prompt pros outros (participantes do ciclo)
@@ -968,7 +1049,6 @@ function emitNotaState(roomId) {
   });
 
   // ✅ importante: re-garante o segredo pro alvo
-  // (sem vazar pros outros)
   notaSendSecretToTarget(roomId);
 }
 
