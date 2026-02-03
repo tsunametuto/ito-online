@@ -141,7 +141,7 @@ function pickDistinct(arr, n) {
 }
 
 /* ---------------------------------------------------
-   ✅ FIX INFILTRADO: filtra dicas incompatíveis
+   ✅ FIX INFILTRADO: normalização + hints por conceito
 --------------------------------------------------- */
 function norm(s) {
   return String(s || "").trim().toLowerCase();
@@ -150,69 +150,108 @@ function hintHas(hint, word) {
   return norm(hint).includes(word);
 }
 
-function getCompatibleHints(themeKey, concept, hints) {
-  const c = norm(concept);
-  const list = Array.isArray(hints) ? hints.slice() : [];
+/**
+ * ✅ Suporta 2 formatos:
+ * 1) theme.infiltratorHints = ["dica1","dica2"] (array antigo/global)
+ * 2) theme.infiltratorHints = { "praia":[...], "parque":[...] } (objeto por conceito)
+ */
+function getHintsForConcept(theme, concept) {
+  const hints = theme?.infiltratorHints;
+
+  // formato antigo: array
+  if (Array.isArray(hints)) return hints.slice();
+
+  // formato novo: objeto por conceito
+  if (hints && typeof hints === "object") {
+    // tenta chave exata
+    if (Array.isArray(hints[concept])) return hints[concept].slice();
+
+    // tenta bater por normalização (caso tenha diferenças de maiúsculas/acentos simples etc.)
+    const c = norm(concept);
+    const keys = Object.keys(hints);
+    const foundKey = keys.find((k) => norm(k) === c);
+    if (foundKey && Array.isArray(hints[foundKey])) return hints[foundKey].slice();
+  }
+
+  return [];
+}
+
+function getCompatibleHints(themeKey, concept, hintsOrTheme) {
+  // ✅ agora aceita:
+  // - array de hints direto
+  // - OU o theme inteiro (ou objeto), de onde a gente extrai por conceito
+  let list = [];
+
+  if (Array.isArray(hintsOrTheme)) {
+    list = hintsOrTheme.slice();
+  } else if (hintsOrTheme && typeof hintsOrTheme === "object" && !Array.isArray(hintsOrTheme)) {
+    // se passaram o theme, pega as hints do conceito
+    // (funciona tanto se for o theme quanto se for { infiltratorHints: ... })
+    const theme = hintsOrTheme.themes ? null : hintsOrTheme; // (não usado, só pra evitar confusão)
+    if (hintsOrTheme.infiltratorHints != null) {
+      list = getHintsForConcept(hintsOrTheme, concept);
+    } else {
+      // ou se passaram direto o objeto de hints por conceito
+      const c = concept;
+      if (Array.isArray(hintsOrTheme[c])) list = hintsOrTheme[c].slice();
+      else {
+        const cc = norm(concept);
+        const keys = Object.keys(hintsOrTheme);
+        const foundKey = keys.find((k) => norm(k) === cc);
+        if (foundKey && Array.isArray(hintsOrTheme[foundKey])) list = hintsOrTheme[foundKey].slice();
+      }
+    }
+  }
+
   if (!list.length) return list;
 
-  // ✅ regras mínimas para "veiculos" (corrige seu exemplo do jato)
+  const c = norm(concept);
+
+  // ✅ regras mínimas para "veiculos"
   if (themeKey === "veiculos") {
-    const fast = new Set([
-      "jato",
-      "avião",
-      "foguete",
-      "nave espacial",
-      "carro de corrida",
-      "moto",
-      "star destroyer",
-      "delorean",
-      "batmóvel",
-    ].map(norm));
+    const fast = new Set(
+      [
+        "jato",
+        "avião",
+        "foguete",
+        "nave espacial",
+        "carro de corrida",
+        "moto",
+        "star destroyer",
+        "delorean",
+        "batmóvel",
+      ].map(norm)
+    );
 
-    const silent = new Set([
-      "carro elétrico",
-      "bicicleta",
-      "patinete",
-      "skate",
-      "metrô",
-      "trem",
-    ].map(norm));
+    const silent = new Set(
+      ["carro elétrico", "bicicleta", "patinete", "skate", "metrô", "trem"].map(norm)
+    );
 
-    const noisy = new Set([
-      "caminhão",
-      "ônibus",
-      "moto",
-      "avião",
-      "helicóptero",
-      "jato",
-      "viatura",
-      "ambulância",
-      "foguete",
-      "carro de corrida",
-      "trator",
-    ].map(norm));
+    const noisy = new Set(
+      [
+        "caminhão",
+        "ônibus",
+        "moto",
+        "avião",
+        "helicóptero",
+        "jato",
+        "viatura",
+        "ambulância",
+        "foguete",
+        "carro de corrida",
+        "trator",
+      ].map(norm)
+    );
 
     let filtered = list;
 
-    // se é rápido, remove dica que contém "lento"
-    if (fast.has(c)) {
-      filtered = filtered.filter((h) => !hintHas(h, "lento"));
-    }
-
-    // se é notoriamente silencioso, remove dica que contém "barulhento"
-    if (silent.has(c)) {
-      filtered = filtered.filter((h) => !hintHas(h, "barulhento"));
-    }
-
-    // se é notoriamente barulhento, remove dica que contém "silencioso"
-    if (noisy.has(c)) {
-      filtered = filtered.filter((h) => !hintHas(h, "silencioso"));
-    }
+    if (fast.has(c)) filtered = filtered.filter((h) => !hintHas(h, "lento"));
+    if (silent.has(c)) filtered = filtered.filter((h) => !hintHas(h, "barulhento"));
+    if (noisy.has(c)) filtered = filtered.filter((h) => !hintHas(h, "silencioso"));
 
     return filtered.length ? filtered : list;
   }
 
-  // outros temas: mantém como está
   return list;
 }
 /* --------------------------------------------------- */
@@ -422,7 +461,10 @@ function derangement(ids) {
     const perm = [...ids].sort(() => Math.random() - 0.5);
     let ok = true;
     for (let i = 0; i < n; i++) {
-      if (perm[i] === ids[i]) { ok = false; break; }
+      if (perm[i] === ids[i]) {
+        ok = false;
+        break;
+      }
     }
     if (ok) {
       const map = {};
@@ -723,9 +765,18 @@ function startInfiltradoRound(roomId) {
 
   const concept = pickOne(theme.concepts);
 
-  // ✅ CORREÇÃO: escolhe dica do infiltrado filtrando incompatíveis com o conceito
-  const compatibleHints = getCompatibleHints(themeKey, concept, theme.infiltratorHints);
-  const infiltradoHint = pickOne(compatibleHints);
+  // ✅ CORREÇÃO REAL: pega hints do conceito (se for objeto) e filtra incompatíveis
+  const rawHints = getHintsForConcept(theme, concept);
+  const compatibleHints = getCompatibleHints(themeKey, concept, rawHints);
+
+  // ✅ fallback pra nunca ficar undefined
+  const finalHints = (compatibleHints && compatibleHints.length)
+    ? compatibleHints
+    : (rawHints && rawHints.length)
+      ? rawHints
+      : ["tente parecer que sabe do assunto"];
+
+  const infiltradoHint = pickOne(finalHints);
 
   const questions = pickDistinct(theme.questions, 3);
   const infiltradoToken = pickOne(tokens);
@@ -813,6 +864,7 @@ function goNextInfiltradoRound(roomId) {
 }
 
 /* ------------------ E A NOTA É... ------------------ */
+/* (o resto do arquivo segue exatamente como você mandou) */
 
 function ensureNota(room) {
   if (!room.nota) {
